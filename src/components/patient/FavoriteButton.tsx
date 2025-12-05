@@ -25,7 +25,7 @@ export function FavoriteButton({
   const [loading, setLoading] = useState<boolean>(true);
   const [updating, setUpdating] = useState<boolean>(false);
 
-  // localStorage から patient_id を取得
+  // mount 時に一度 localStorage から patient_id を取得
   useEffect(() => {
     if (typeof window === "undefined") return;
     const stored = window.localStorage.getItem(PATIENT_ID_KEY);
@@ -65,12 +65,25 @@ export function FavoriteButton({
   }, [patientId, pharmacistId]);
 
   const handleClick = async () => {
-    if (!patientId) {
-      alert("診断結果がまだこの端末に保存されていません。診断を完了してからご利用ください。");
-      return;
+    if (loading || updating) return;
+
+    // 🔸ここが重要：クリック時にもう一度 localStorage を確認する
+    let effectivePatientId = patientId;
+    if (!effectivePatientId && typeof window !== "undefined") {
+      const stored = window.localStorage.getItem(PATIENT_ID_KEY);
+      if (stored) {
+        setPatientId(stored);
+        effectivePatientId = stored;
+      }
     }
 
-    if (loading || updating) return;
+    // それでもまだ無ければアラート
+    if (!effectivePatientId) {
+      alert(
+        "診断結果がまだこの端末に保存されていません。診断を完了してからご利用ください。"
+      );
+      return;
+    }
 
     setUpdating(true);
     try {
@@ -79,19 +92,23 @@ export function FavoriteButton({
         const { count, error: countError } = await supabase
           .from("patient_favorites")
           .select("id", { count: "exact", head: true })
-          .eq("patient_id", patientId);
+          .eq("patient_id", effectivePatientId);
 
         if (countError) {
           console.error(countError);
         } else if ((count ?? 0) >= MAX_FAVORITES) {
-          alert("「気になる薬剤師」は最大30件まで登録できます。不要な薬剤師を削除してから追加してください。");
+          alert(
+            "「気になる薬剤師」は最大30件まで登録できます。不要な薬剤師を削除してから追加してください。"
+          );
           return;
         }
 
-        const { error: insertError } = await supabase.from("patient_favorites").insert({
-          patient_id: patientId,
-          pharmacist_id: pharmacistId,
-        });
+        const { error: insertError } = await supabase
+          .from("patient_favorites")
+          .insert({
+            patient_id: effectivePatientId,
+            pharmacist_id: pharmacistId,
+          });
 
         if (insertError) {
           console.error(insertError);
@@ -103,7 +120,7 @@ export function FavoriteButton({
         const { error: delError } = await supabase
           .from("patient_favorites")
           .delete()
-          .eq("patient_id", patientId)
+          .eq("patient_id", effectivePatientId)
           .eq("pharmacist_id", pharmacistId);
 
         if (delError) {

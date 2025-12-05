@@ -1,8 +1,9 @@
 // src/app/pharmacists/[id]/page.tsx
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useParams, useSearchParams, useRouter } from "next/navigation";
+import Image from "next/image";
 import { supabase } from "@/lib/supabaseClient";
 import type {
   Pharmacist,
@@ -14,6 +15,18 @@ import { scorePharmacist } from "@/lib/matching/scorePharmacist";
 import { AppCard } from "@/components/ui/app-card";
 import { AppButton } from "@/components/ui/app-button";
 import { FavoriteButton } from "@/components/patient/FavoriteButton";
+import {
+  ArrowLeft,
+  User,
+  Hospital,
+  MapPin,
+  Calendar,
+  MessageCircle,
+  Globe2,
+  Link2,
+  AlertCircle,
+  Loader2,
+} from "lucide-react";
 
 type CareStyleKey =
   | "understanding"
@@ -36,6 +49,7 @@ const CARE_STYLE_OPTIONS: { key: CareStyleKey; label: string }[] = [
 type ExtendedPharmacist = Pharmacist & {
   visibility?: "public" | "members" | null;
   one_line_message?: string | null;
+  short_message?: string | null;
   gender?: "" | "女性" | "男性" | "その他" | null;
   gender_other?: string | null;
   birth_date?: string | null;
@@ -46,6 +60,8 @@ type ExtendedPharmacist = Pharmacist & {
   image_urls?: string[] | null;
   image_url?: string | null;
   care_role?: CareStyleKey[] | null;
+  booking_url?: string | null;
+  line_url?: string | null;
 };
 
 interface PharmacistWithPharmacy {
@@ -73,11 +89,17 @@ function formatLanguageLabel(code: string): string {
 }
 
 export default function PharmacistDetailPage() {
-  const params = useParams<{ id: string }>();
+  const params = useParams<{ id?: string | string[] }>();
   const searchParams = useSearchParams();
   const router = useRouter();
+
   const patientId = searchParams.get("patientId") ?? null;
-  const pharmacistId = params?.id as string | undefined;
+  const pharmacistId =
+    typeof params?.id === "string"
+      ? params.id
+      : Array.isArray(params?.id)
+      ? params.id[0]
+      : "";
 
   const [data, setData] = useState<PharmacistWithPharmacy | null>(null);
   const [loading, setLoading] = useState(true);
@@ -117,7 +139,7 @@ export default function PharmacistDetailPage() {
           return;
         }
 
-        // 2) 薬局
+        // 2) 薬局（所属店舗）
         let pharmacy: Pharmacy | null = null;
         if (ph.belongs_pharmacy_id) {
           const { data: pm } = await supabase
@@ -170,363 +192,286 @@ export default function PharmacistDetailPage() {
     void run();
   }, [pharmacistId, patientId]);
 
+  const handleBack = () => {
+    if (window.history.length > 1) {
+      router.back();
+    } else {
+      router.push("/pharmacists");
+    }
+  };
+
+  const memoized = useMemo(() => {
+    if (!data) return null;
+
+    const { pharmacist, pharmacy } = data;
+
+    const oneLineMessage =
+      pharmacist.one_line_message ?? pharmacist.short_message ?? "";
+    const visibilityRaw = pharmacist.visibility ?? "members";
+    const visibility: VisibilityType =
+      visibilityRaw === "public"
+        ? "public"
+        : visibilityRaw === "members"
+        ? "members"
+        : "other";
+
+    const mainImageUrl = pharmacist.image_url ?? null;
+    const subImages =
+      (pharmacist.image_urls ?? []).filter((url) => url !== mainImageUrl) ?? [];
+
+    const years = pharmacist.years_of_experience ?? null;
+    const gender = pharmacist.gender ?? "";
+    const genderOther = pharmacist.gender_other ?? "";
+    const ageCategory = pharmacist.age_category ?? null;
+    const licenseNumber = pharmacist.license_number ?? null;
+
+    const languages = (pharmacist.language as string[] | null) ?? [];
+    const specialties = (pharmacist.specialty as string[] | null) ?? [];
+    const careRoles = (pharmacist.care_role as CareStyleKey[] | null) ?? [];
+    const experiences =
+      (pharmacist.experience_case as string[] | null) ?? [];
+
+    const personality = pharmacist.personality ?? "";
+    const consultationStyle = pharmacist.consultation_style ?? "";
+
+    const webLinks = (pharmacist.web_links as string[] | null) ?? [];
+    const snsLinks = (pharmacist.sns_links as string[] | null) ?? [];
+
+    const bookingUrl = pharmacist.booking_url ?? null;
+    const lineUrl = pharmacist.line_url ?? null;
+
+    return {
+      pharmacist,
+      pharmacy,
+      oneLineMessage,
+      visibility,
+      mainImageUrl,
+      subImages,
+      years,
+      gender,
+      genderOther,
+      ageCategory,
+      licenseNumber,
+      languages,
+      specialties,
+      careRoles,
+      experiences,
+      personality,
+      consultationStyle,
+      webLinks,
+      snsLinks,
+      bookingUrl,
+      lineUrl,
+    };
+  }, [data]);
+
   if (loading) {
     return (
-      <div className="mx-auto max-w-3xl px-4 py-6 text-sm text-slate-600">
-        読み込み中です...
+      <div className="mx-auto max-w-4xl px-4 py-8">
+        <AppCard className="flex items-center gap-2 text-sm text-slate-600">
+          <Loader2 className="h-4 w-4 animate-spin" />
+          <span>薬剤師プロフィールを読み込んでいます...</span>
+        </AppCard>
       </div>
     );
   }
 
-  if (error || !data) {
+  if (error || !memoized) {
     return (
-      <div className="mx-auto max-w-3xl px-4 py-6 space-y-3">
-        <p className="text-sm text-red-700">
-          {error ?? "データが見つかりません。"}
-        </p>
-        <AppButton
-          size="sm"
-          variant="outline"
-          onClick={() => router.push("/pharmacists")}
+      <div className="mx-auto max-w-4xl px-4 py-8 space-y-4">
+        <button
+          type="button"
+          onClick={handleBack}
+          className="inline-flex items-center text-xs text-slate-600 hover:text-slate-900"
         >
-          薬剤師一覧にもどる
-        </AppButton>
+          <ArrowLeft className="mr-1 h-4 w-4" />
+          薬剤師一覧に戻る
+        </button>
+        <AppCard className="space-y-2 border-red-200 bg-red-50/70">
+          <div className="flex items-center gap-2 text-sm font-medium text-red-800">
+            <AlertCircle className="h-4 w-4" />
+            プロフィールの表示中にエラーが発生しました
+          </div>
+          <div className="text-xs text-red-700">
+            {error ?? "薬剤師プロフィールが見つかりませんでした。"}
+          </div>
+        </AppCard>
       </div>
     );
   }
 
-  const { pharmacist, pharmacy } = data;
+  const {
+    pharmacist,
+    pharmacy,
+    oneLineMessage,
+    visibility,
+    mainImageUrl,
+    subImages,
+    years,
+    gender,
+    genderOther,
+    ageCategory,
+    licenseNumber,
+    languages,
+    specialties,
+    careRoles,
+    experiences,
+    personality,
+    consultationStyle,
+    webLinks,
+    snsLinks,
+    bookingUrl,
+    lineUrl,
+  } = memoized;
 
-  const oneLineMessage = pharmacist.one_line_message ?? "";
-  const visibilityRaw = pharmacist.visibility ?? "members";
-  const visibility: VisibilityType =
-    visibilityRaw === "public"
-      ? "public"
-      : visibilityRaw === "members"
-      ? "members"
-      : "other";
+  const imageSrc = mainImageUrl ?? "/images/pharmacist-placeholder.png";
+  const isExternalImage =
+    imageSrc.startsWith("http://") || imageSrc.startsWith("https://");
 
-  const mainImageUrl = pharmacist.image_url ?? null;
-  const subImages =
-    (pharmacist.image_urls ?? []).filter((url) => url !== mainImageUrl) ?? [];
-
-  const years = pharmacist.years_of_experience ?? null;
-  const gender = pharmacist.gender ?? "";
-  const genderOther = pharmacist.gender_other ?? "";
-  const ageCategory = pharmacist.age_category ?? null;
-  const licenseNumber = pharmacist.license_number ?? null;
-
-  const languages = pharmacist.language ?? [];
-  const specialties = pharmacist.specialty ?? [];
-  const careRoles = (pharmacist.care_role as CareStyleKey[] | null) ?? [];
-  const experiences = pharmacist.experience_case ?? [];
-
-  const personality = pharmacist.personality ?? "";
-  const consultationStyle = pharmacist.consultation_style ?? "";
-
-  const webLinks = pharmacist.web_links ?? [];
-  const snsLinks = pharmacist.sns_links ?? [];
-
-  const bookingUrl = (pharmacist as any).booking_url as string | null;
-  const lineUrl = (pharmacist as any).line_url as string | null;
+  const introText = consultationStyle || personality;
 
   return (
-    <div className="mx-auto max-w-3xl px-4 py-6 space-y-5">
-      {/* 上部ヘッダー */}
-      <div className="flex items-start justify-between gap-3">
-        <div className="space-y-1">
-          <h1 className="text-2xl font-bold text-slate-900">
-            {pharmacist.name}
-          </h1>
-          <div className="flex flex-wrap items-center gap-2 text-[11px] text-slate-600">
-            {pharmacy?.name && <span>{pharmacy.name}</span>}
-            {pharmacy?.area && (
-              <span className="rounded-full border border-slate-200 px-2 py-0.5">
-                {pharmacy.area}
-              </span>
-            )}
-            {visibility === "public" ? (
-              <span className="rounded-full border border-emerald-300 bg-emerald-50 px-2 py-0.5 text-emerald-700">
-                一般公開
-              </span>
+    <div className="mx-auto max-w-4xl px-4 py-8 space-y-6">
+      {/* 戻るリンク */}
+      <button
+        type="button"
+        onClick={handleBack}
+        className="inline-flex items-center text-xs text-slate-600 hover:text-slate-900"
+      >
+        <ArrowLeft className="mr-1 h-4 w-4" />
+        {patientId ? "診断結果に戻る" : "薬剤師一覧に戻る"}
+      </button>
+
+      {/* ヘッダー + 基本情報 */}
+      <AppCard className="flex flex-col gap-4 p-4 sm:flex-row sm:items-start">
+        {/* 顔写真 */}
+        <div className="flex-shrink-0">
+          <div className="h-24 w-24 overflow-hidden rounded-full bg-slate-100 sm:h-28 sm:w-28">
+            {isExternalImage ? (
+              <img
+                src={imageSrc}
+                alt={`${pharmacist.name}の写真`}
+                className="h-full w-full object-cover"
+              />
             ) : (
-              <span className="rounded-full border border-slate-300 bg-slate-50 px-2 py-0.5 text-slate-700">
-                登録ユーザー限定（将来的に制御予定）
-              </span>
+              <Image
+                src={imageSrc}
+                alt={`${pharmacist.name}の写真`}
+                width={112}
+                height={112}
+                className="h-full w-full object-cover"
+              />
             )}
           </div>
-          {oneLineMessage && (
-            <p className="text-sm text-slate-700">{oneLineMessage}</p>
-          )}
-        </div>
 
-        <div className="flex flex-col items-end gap-2">
-          {/* お気に入りボタン：patientId は不要（localStorage 利用） */}
-          <FavoriteButton pharmacistId={pharmacist.id} />
-          <AppButton
-            size="sm"
-            variant="outline"
-            onClick={() => {
-              if (patientId) {
-                router.push(`/pharmacists?patientId=${patientId}`);
-              } else {
-                router.push("/pharmacists");
-              }
-            }}
-          >
-            一覧にもどる
-          </AppButton>
-        </div>
-      </div>
-
-      {/* プロフィール本体 */}
-      <AppCard className="space-y-4 p-4">
-        {/* 写真＋基本情報 */}
-        <div className="flex flex-col gap-4 sm:flex-row">
-          {(mainImageUrl || subImages.length > 0) && (
-            <div className="sm:w-44 space-y-2">
-              {mainImageUrl && (
-                <div className="h-40 w-40 overflow-hidden rounded-lg bg-slate-100">
+          {subImages.length > 0 && (
+            <div className="mt-2 flex flex-wrap gap-1">
+              {subImages.slice(0, 3).map((url) => (
+                <div
+                  key={url}
+                  className="h-10 w-10 overflow-hidden rounded-md bg-slate-100"
+                >
                   <img
-                    src={mainImageUrl}
-                    alt={pharmacist.name}
+                    src={url}
+                    alt={`${pharmacist.name} サブ画像`}
                     className="h-full w-full object-cover"
                   />
                 </div>
-              )}
-              {subImages.length > 0 && (
-                <div className="flex flex-wrap gap-2">
-                  {subImages.slice(0, 4).map((url) => (
-                    <div
-                      key={url}
-                      className="h-12 w-12 overflow-hidden rounded-md bg-slate-100"
-                    >
-                      <img
-                        src={url}
-                        alt={`${pharmacist.name} サブ画像`}
-                        className="h-full w-full object-cover"
-                      />
-                    </div>
-                  ))}
-                </div>
-              )}
+              ))}
             </div>
           )}
-
-          <div className="flex-1 space-y-3 text-sm text-slate-700">
-            <div className="flex flex-wrap gap-2 text-[11px]">
-              {years != null && (
-                <span className="rounded-full bg-slate-50 px-2 py-0.5 text-slate-700 border border-slate-200">
-                  経験年数：{years} 年
-                </span>
-              )}
-              {gender && (
-                <span className="rounded-full bg-slate-50 px-2 py-0.5 text-slate-700 border border-slate-200">
-                  性別：
-                  {gender === "その他" && genderOther
-                    ? `その他（${genderOther}）`
-                    : gender}
-                </span>
-              )}
-              {ageCategory && (
-                <span className="rounded-full bg-slate-50 px-2 py-0.5 text-slate-700 border border-slate-200">
-                  年代：{ageCategory}
-                </span>
-              )}
-              {/* 診断経由で patient があるときだけスコア表示 */}
-              {patient && matchScore != null && (
-                <span className="rounded-full bg-sky-50 px-2 py-0.5 text-sky-700 border border-sky-200">
-                  マッチング {matchScore} 点
-                </span>
-              )}
-            </div>
-
-            {specialties.length > 0 && (
-              <div className="space-y-1">
-                <p className="text-xs font-semibold text-slate-800">
-                  専門領域
-                </p>
-                <div className="flex flex-wrap gap-1 text-[11px]">
-                  {specialties.map((s) => (
-                    <span
-                      key={s}
-                      className="rounded-full bg-sky-50 px-2 py-0.5 text-sky-700 border border-sky-100"
-                    >
-                      {s}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {languages.length > 0 && (
-              <div className="space-y-1">
-                <p className="text-xs font-semibold text-slate-800">
-                  対応言語
-                </p>
-                <div className="flex flex-wrap gap-1 text-[11px]">
-                  {languages.map((l) => (
-                    <span
-                      key={l}
-                      className="rounded-full bg-emerald-50 px-2 py-0.5 text-emerald-700 border border-emerald-100"
-                    >
-                      {formatLanguageLabel(l)}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {careRoles.length > 0 && (
-              <div className="space-y-1">
-                <p className="text-xs font-semibold text-slate-800">
-                  得意な相談スタイル
-                </p>
-                <div className="flex flex-wrap gap-1 text-[11px]">
-                  {careRoles.map((c) => {
-                    const label =
-                      CARE_STYLE_OPTIONS.find((o) => o.key === c)?.label ?? c;
-                    return (
-                      <span
-                        key={c}
-                        className="rounded-full bg-orange-50 px-2 py-0.5 text-orange-700 border border-orange-100"
-                      >
-                        {label}
-                      </span>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
-
-            {licenseNumber && (
-              <div className="space-y-0.5 text-[11px] text-slate-500">
-                <span>薬剤師免許番号：{licenseNumber}</span>
-              </div>
-            )}
-          </div>
         </div>
 
-        {/* 性格・相談スタイルの説明 */}
-        {(personality || consultationStyle) && (
-          <div className="space-y-3 rounded-md bg-slate-50 p-3 text-sm text-slate-700">
-            {personality && (
-              <div>
-                <p className="text-xs font-semibold text-slate-800 mb-1">
-                  性格・スタイル
-                </p>
-                <p className="whitespace-pre-wrap text-xs">{personality}</p>
-              </div>
-            )}
-            {consultationStyle && (
-              <div>
-                <p className="text-xs font-semibold text-slate-800 mb-1">
-                  相談の進め方
-                </p>
-                <p className="whitespace-pre-wrap text-xs">
-                  {consultationStyle}
-                </p>
-              </div>
-            )}
+        {/* テキスト情報 */}
+        <div className="flex-1 space-y-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <h1 className="text-xl font-semibold text-slate-900 sm:text-2xl">
+              {pharmacist.name ?? "（名称未設定）"}
+            </h1>
+            <span className="inline-flex items-center rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] text-slate-600">
+              <User className="mr-1 h-3 w-3" />
+              薬剤師
+            </span>
+            <span
+              className={[
+                "inline-flex items-center rounded-full px-2 py-0.5 text-[10px] border",
+                visibility === "public"
+                  ? "border-emerald-300 bg-emerald-50 text-emerald-700"
+                  : "border-slate-300 bg-slate-50 text-slate-700",
+              ].join(" ")}
+            >
+              {visibility === "public" ? "一般公開" : "登録ユーザー限定"}
+            </span>
           </div>
-        )}
 
-        {/* 診断結果に基づくマッチング情報 */}
-        {patient && matchScore != null && (
-          <div className="space-y-2 rounded-md bg-sky-50 p-3 text-sm text-slate-700">
-            <p className="text-xs font-semibold text-sky-800">
-              あなたの診断結果にもとづくマッチング評価
-            </p>
-            <p className="text-xs md:text-sm">
-              この薬剤師さんは、あなたとのマッチングスコアが{" "}
-              <span className="font-semibold text-sky-700">
-                {matchScore} 点
+          {oneLineMessage && (
+            <p className="text-sm text-slate-700">{oneLineMessage}</p>
+          )}
+
+          {/* 属性タグ */}
+          <div className="flex flex-wrap gap-2 text-[11px]">
+            {years != null && (
+              <span className="rounded-full bg-slate-50 px-2 py-0.5 text-slate-700 border border-slate-200">
+                経験 {years} 年
               </span>
-              でした。
-            </p>
-            {matchReasons.length > 0 && (
-              <ul className="mt-1 list-disc pl-5 text-xs space-y-1">
-                {matchReasons.map((r, i) => (
-                  <li key={i}>{r}</li>
-                ))}
-              </ul>
+            )}
+            {gender && (
+              <span className="rounded-full bg-slate-50 px-2 py-0.5 text-slate-700 border border-slate-200">
+                性別:{" "}
+                {gender === "その他" && genderOther
+                  ? `その他（${genderOther}）`
+                  : gender}
+              </span>
+            )}
+            {ageCategory && (
+              <span className="rounded-full bg-slate-50 px-2 py-0.5 text-slate-700 border border-slate-200">
+                年代: {ageCategory}
+              </span>
+            )}
+            {patient && matchScore != null && (
+              <span className="rounded-full bg-sky-50 px-2 py-0.5 text-sky-700 border border-sky-200">
+                マッチング {matchScore} 点
+              </span>
             )}
           </div>
-        )}
 
-        {/* 主な相談経験 */}
-        {experiences.length > 0 && (
-          <div className="space-y-1 text-sm text-slate-700">
-            <p className="text-xs font-semibold text-slate-800">
-              主なご相談経験
-            </p>
-            <p className="text-xs">{experiences.join(" / ")}</p>
-          </div>
-        )}
-
-        {/* Webリンク / SNSリンク */}
-        {(webLinks.length > 0 || snsLinks.length > 0) && (
-          <div className="grid gap-3 md:grid-cols-2 text-xs text-slate-700">
-            {webLinks.length > 0 && (
-              <div className="space-y-1">
-                <p className="text-xs font-semibold text-slate-800">
-                  関連リンク
-                </p>
-                <ul className="space-y-1">
-                  {webLinks.map((url, idx) => (
-                    <li key={url + idx}>
-                      <a
-                        href={url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-sky-700 underline break-all"
-                      >
-                        {url}
-                      </a>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            )}
-
-            {snsLinks.length > 0 && (
-              <div className="space-y-1">
-                <p className="text-xs font-semibold text-slate-800">
-                  SNSアカウント
-                </p>
-                <ul className="space-y-1">
-                  {snsLinks.map((url, idx) => (
-                    <li key={url + idx}>
-                      <a
-                        href={url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-sky-700 underline break-all"
-                      >
-                        {url}
-                      </a>
-                    </li>
-                  ))}
-                </ul>
+          {/* 所属情報 */}
+          <div className="space-y-1 text-xs text-slate-600">
+            <div className="flex flex-wrap items-center gap-2">
+              <Hospital className="h-4 w-4 text-slate-400" />
+              <span className="font-medium text-slate-800">所属：</span>
+              <span>
+                {pharmacy?.name ?? "（所属薬局は未公開または未登録）"}
+              </span>
+            </div>
+            {pharmacy?.area && (
+              <div className="flex flex-wrap items-center gap-2">
+                <MapPin className="h-4 w-4 text-slate-400" />
+                <span className="text-slate-700">{pharmacy.area}</span>
               </div>
             )}
           </div>
-        )}
 
-        {/* 薬局情報 */}
-        {pharmacy && (
-          <div className="space-y-1 text-sm text-slate-700">
-            <p className="text-xs font-semibold text-slate-800">所属薬局</p>
-            <p className="text-xs">
-              {pharmacy.name}
-              {pharmacy.area && `（エリア：${pharmacy.area}）`}
-            </p>
+          {/* 上部右側：お気に入り & 戻るボタン */}
+          <div className="flex flex-col gap-2 pt-2 sm:flex-row sm:items-center sm:justify-between">
+            <FavoriteButton pharmacistId={pharmacist.id} />
+            <AppButton
+              size="sm"
+              variant="outline"
+              onClick={() => {
+                if (patientId) {
+                  router.push(`/pharmacists?patientId=${patientId}`);
+                } else {
+                  router.push("/pharmacists");
+                }
+              }}
+            >
+              一覧にもどる
+            </AppButton>
           </div>
-        )}
 
-        {/* 予約・連絡ボタン */}
-        <div className="mt-2 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-          <div className="flex flex-col gap-2 sm:flex-row sm:gap-3">
+          {/* 予約 / 連絡ボタン */}
+          <div className="flex flex-col gap-2 pt-2 sm:flex-row sm:gap-2">
             {bookingUrl && (
               <AppButton
                 size="sm"
@@ -535,7 +480,8 @@ export default function PharmacistDetailPage() {
                   window.open(bookingUrl, "_blank", "noopener,noreferrer")
                 }
               >
-                空き時間を予約する（Googleカレンダー）
+                <Calendar className="mr-1 h-4 w-4" />
+                空き時間を予約する
               </AppButton>
             )}
             {lineUrl && (
@@ -544,18 +490,200 @@ export default function PharmacistDetailPage() {
                 onClick={() =>
                   window.open(lineUrl, "_blank", "noopener,noreferrer")
                 }
-                className="rounded-md border border-[#06C755] bg-[#06C755] px-3 py-1.5 text-xs font-medium text-white hover:opacity-90"
+                className="inline-flex items-center justify-center rounded-md border border-[#06C755] bg-[#06C755] px-3 py-2 text-[11px] font-medium text-white hover:opacity-90"
               >
+                <MessageCircle className="mr-1 h-4 w-4" />
                 LINEで相談する
               </button>
             )}
           </div>
-
-          <p className="text-[10px] text-slate-500">
-            ※ 「登録ユーザー限定」プロフィールについては、今後ログイン有無による表示制御を行う予定です。
-          </p>
         </div>
       </AppCard>
+
+      {/* 自己紹介・相談スタイル */}
+      <AppCard className="space-y-3">
+        <h2 className="text-sm font-semibold text-slate-900">
+          自己紹介・相談スタイル
+        </h2>
+        {introText ? (
+          <p className="whitespace-pre-wrap text-sm leading-relaxed text-slate-700">
+            {introText}
+          </p>
+        ) : (
+          <p className="text-xs text-slate-500">
+            自己紹介の文章はまだ登録されていません。
+          </p>
+        )}
+      </AppCard>
+
+      {/* タグエリア：得意な分野・患者タイプ・言語など */}
+      <AppCard className="space-y-4">
+        <h2 className="text-sm font-semibold text-slate-900">
+          得意な分野・対応できる患者さん
+        </h2>
+
+        {/* 言語 */}
+        <div className="space-y-1 text-xs">
+          <p className="font-medium text-slate-700">対応可能な言語</p>
+          <div className="flex flex-wrap gap-1">
+            {languages.length === 0 ? (
+              <span className="text-[11px] text-slate-400">未設定</span>
+            ) : (
+              languages.map((l) => (
+                <span
+                  key={l}
+                  className="rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] text-emerald-700 border border-emerald-100"
+                >
+                  {formatLanguageLabel(l)}
+                </span>
+              ))
+            )}
+          </div>
+        </div>
+
+        {/* 専門領域 */}
+        <div className="space-y-1 text-xs">
+          <p className="font-medium text-slate-700">得意な領域・症状</p>
+          <div className="flex flex-wrap gap-1">
+            {specialties.length === 0 ? (
+              <span className="text-[11px] text-slate-400">未設定</span>
+            ) : (
+              specialties.map((s) => (
+                <span
+                  key={s}
+                  className="rounded-full bg-sky-50 px-2 py-0.5 text-[11px] text-sky-700 border border-sky-100"
+                >
+                  {s}
+                </span>
+              ))
+            )}
+          </div>
+        </div>
+
+        {/* 得意な患者タイプ（care_role） */}
+        <div className="space-y-1 text-xs">
+          <p className="font-medium text-slate-700">
+            得意な患者さんのタイプ
+          </p>
+          <div className="flex flex-wrap gap-1">
+            {careRoles.length === 0 ? (
+              <span className="text-[11px] text-slate-400">未設定</span>
+            ) : (
+              careRoles.map((c) => {
+                const label =
+                  CARE_STYLE_OPTIONS.find((o) => o.key === c)?.label ?? c;
+                return (
+                  <span
+                    key={c}
+                    className="rounded-full bg-orange-50 px-2 py-0.5 text-[11px] text-orange-700 border border-orange-100"
+                  >
+                    {label}
+                  </span>
+                );
+              })
+            )}
+          </div>
+        </div>
+
+        {/* 主な相談経験 */}
+        <div className="space-y-1 text-xs">
+          <p className="font-medium text-slate-700">主なご相談経験</p>
+          {experiences.length === 0 ? (
+            <span className="text-[11px] text-slate-400">未設定</span>
+          ) : (
+            <p className="text-[11px] text-slate-700">
+              {experiences.join(" / ")}
+            </p>
+          )}
+        </div>
+
+        {/* 免許番号 */}
+        {licenseNumber && (
+          <div className="space-y-1 text-xs text-slate-600">
+            <p className="font-medium text-slate-700">薬剤師免許番号</p>
+            <p>{licenseNumber}</p>
+          </div>
+        )}
+      </AppCard>
+
+      {/* 診断結果に基づくマッチング情報 */}
+      {patient && matchScore != null && (
+        <AppCard className="space-y-2 border-sky-200 bg-sky-50/70">
+          <p className="text-xs font-semibold text-sky-800">
+            あなたの診断結果にもとづくマッチング評価
+          </p>
+          <p className="text-xs md:text-sm text-sky-900">
+            この薬剤師さんは、あなたとのマッチングスコアが{" "}
+            <span className="font-semibold">{matchScore} 点</span>
+            でした。
+          </p>
+          {matchReasons.length > 0 && (
+            <ul className="mt-1 list-disc pl-5 text-[11px] space-y-1 text-sky-900">
+              {matchReasons.map((r, i) => (
+                <li key={i}>{r}</li>
+              ))}
+            </ul>
+          )}
+        </AppCard>
+      )}
+
+      {/* Webリンク / SNSリンク */}
+      {(webLinks.length > 0 || snsLinks.length > 0) && (
+        <AppCard className="space-y-3">
+          <h2 className="text-sm font-semibold text-slate-900">
+            Webサイト・SNS
+          </h2>
+          <div className="space-y-2 text-xs">
+            {webLinks.length > 0 && (
+              <div className="space-y-1">
+                <p className="font-medium text-slate-700">Webサイト</p>
+                <ul className="space-y-1">
+                  {webLinks.map((url, idx) => (
+                    <li key={url + idx}>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          window.open(url, "_blank", "noopener,noreferrer")
+                        }
+                        className="inline-flex items-center gap-1 text-emerald-700 hover:text-emerald-900"
+                      >
+                        <Globe2 className="h-3 w-3" />
+                        <span className="underline underline-offset-2 break-all">
+                          {url}
+                        </span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {snsLinks.length > 0 && (
+              <div className="space-y-1">
+                <p className="font-medium text-slate-700">SNSアカウント</p>
+                <ul className="space-y-1">
+                  {snsLinks.map((url, idx) => (
+                    <li key={url + idx}>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          window.open(url, "_blank", "noopener,noreferrer")
+                        }
+                        className="inline-flex items-center gap-1 text-emerald-700 hover:text-emerald-900"
+                      >
+                        <Link2 className="h-3 w-3" />
+                        <span className="underline underline-offset-2 break-all">
+                          {url}
+                        </span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
+        </AppCard>
+      )}
     </div>
   );
 }

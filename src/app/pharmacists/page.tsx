@@ -1,7 +1,7 @@
 // src/app/pharmacists/page.tsx
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import Image from "next/image";
 import { supabase } from "@/lib/supabaseClient";
@@ -24,6 +24,7 @@ type ExtendedPharmacist = Pharmacist & {
   visibility?: "public" | "members" | null;
   one_line_message?: string | null;
   gender?: "" | "女性" | "男性" | "その他" | null;
+  short_message?: string | null; 
   gender_other?: string | null;
   birth_date?: string | null;
   age_category?: "20代" | "30代" | "40代" | "50代" | "60代" | "70代以上" | null;
@@ -33,6 +34,8 @@ type ExtendedPharmacist = Pharmacist & {
   image_urls?: string[] | null;
   image_url?: string | null;
   care_role?: CareStyleKey[] | null;
+  booking_url?: string | null;
+  line_url?: string | null; 
 };
 
 interface PharmacistWithPharmacy {
@@ -84,7 +87,8 @@ function formatLanguageLabel(code: string): string {
   }
 }
 
-export default function PharmacistsListPage() {
+// ★ ここからが実際のページ本体コンポーネント
+function PharmacistsListPageInner() {
   const searchParams = useSearchParams();
   const router = useRouter();
   const patientId = searchParams.get("patientId") ?? null;
@@ -140,6 +144,7 @@ export default function PharmacistsListPage() {
         const { data: pharmacistsData, error: phError } = await supabase
           .from("pharmacists")
           .select("*")
+          .in("visibility", ["public", "members"]) // ログイン状況は public 側で制御
           .order("name", { ascending: true })
           .returns<ExtendedPharmacist[]>();
 
@@ -240,12 +245,10 @@ export default function PharmacistsListPage() {
       // キーワード検索（名前・薬局名・専門・言語・経験・一言メッセージなど）
       if (kw) {
         const oneLine =
-          pharmacist.one_line_message ??
-          ((pharmacist as any).short_message as string | null) ??
-          "";
+          pharmacist.one_line_message ?? pharmacist.short_message ?? "";
         const profile =
-          ((pharmacist as any).profile_message as string | null) ??
-          (pharmacist.consultation_style as string | null) ??
+          (pharmacist as any).profile_message ??
+          pharmacist.consultation_style ??
           "";
 
         const textBucket = [
@@ -550,9 +553,7 @@ export default function PharmacistsListPage() {
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {filteredItemsWithScore.map(({ pharmacist, pharmacy, score }) => {
             const oneLine =
-              pharmacist.one_line_message ??
-              ((pharmacist as any).short_message as string | null) ??
-              "";
+              pharmacist.one_line_message ?? pharmacist.short_message ?? "";
             const visibilityRaw = pharmacist.visibility ?? "members";
             const visibility: VisibilityType =
               visibilityRaw === "public"
@@ -582,9 +583,8 @@ export default function PharmacistsListPage() {
             const experiences =
               (pharmacist.experience_case as string[] | null) ?? [];
 
-            const bookingUrl = (pharmacist as any)
-              .booking_url as string | null;
-            const lineUrl = (pharmacist as any).line_url as string | null;
+            const bookingUrl = pharmacist.booking_url ?? null;
+            const lineUrl = pharmacist.line_url ?? null;
 
             const handleDetailClick = () => {
               const base = `/pharmacists/${pharmacist.id}`;
@@ -811,5 +811,20 @@ export default function PharmacistsListPage() {
         </div>
       )}
     </div>
+  );
+}
+
+// ★ ここが Suspense でラップするためのエクスポート
+export default function PharmacistsListPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="mx-auto max-w-6xl px-4 py-6 text-sm text-slate-600">
+          薬剤師一覧を読み込んでいます...
+        </div>
+      }
+    >
+      <PharmacistsListPageInner />
+    </Suspense>
   );
 }

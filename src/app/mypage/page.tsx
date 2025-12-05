@@ -3,15 +3,23 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { supabase } from "@/lib/supabaseClient";
 import type { Patient, Pharmacist } from "@/types/supabase";
+import { useUser } from "@/hooks/useUser";
 import { AppCard } from "@/components/ui/app-card";
 import { AppButton } from "@/components/ui/app-button";
-import { Loader2, UserCircle2, Star, Heart, Trash2, AlertCircle } from "lucide-react";
-import Link from "next/link";
+import {
+  Loader2,
+  UserCircle2,
+  Star,
+  Heart,
+  Trash2,
+  AlertCircle,
+} from "lucide-react";
 
 type PatientWithDiagnosis = Patient & {
-  patient_type?: string | null; // A/B/C/D を想定（カラム名が違う場合は調整）
+  patient_type?: string | null; // A/B/C/D を想定
   care_style?: string | null;
   created_at?: string;
 };
@@ -104,12 +112,29 @@ function formatDate(dateStr?: string | null): string {
 
 export default function MyPage() {
   const router = useRouter();
+
+  // 認証 + プロフィール（useUser フックから）
+  const {
+    loading: authLoading,
+    isAuthenticated,
+    profile,
+    role,
+  } = useUser();
+
+  // 診断情報 / お気に入り
   const [patientId, setPatientId] = useState<string | null>(null);
   const [patient, setPatient] = useState<PatientWithDiagnosis | null>(null);
   const [favorites, setFavorites] = useState<FavoriteRow[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [dataLoading, setDataLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [removingId, setRemovingId] = useState<string | null>(null);
+
+  // 0) ログインしていなければ /login に飛ばす（ガード）
+  useEffect(() => {
+    if (!authLoading && !isAuthenticated) {
+      router.push("/login");
+    }
+  }, [authLoading, isAuthenticated, router]);
 
   // 1) ローカルストレージから patient_id を取得
   useEffect(() => {
@@ -119,7 +144,7 @@ export default function MyPage() {
       setPatientId(stored);
     } else {
       setPatientId(null);
-      setLoading(false);
+      setDataLoading(false);
     }
   }, []);
 
@@ -129,7 +154,7 @@ export default function MyPage() {
     let cancelled = false;
 
     const fetchData = async () => {
-      setLoading(true);
+      setDataLoading(true);
       setError(null);
       try {
         const [patientRes, favRes] = await Promise.all([
@@ -167,7 +192,7 @@ export default function MyPage() {
         }
       } finally {
         if (!cancelled) {
-          setLoading(false);
+          setDataLoading(false);
         }
       }
     };
@@ -210,14 +235,39 @@ export default function MyPage() {
 
   const handleGoResult = () => {
     if (!patientId) {
-      alert("まだこの端末に診断結果が保存されていません。先に診断を行ってください。");
+      alert(
+        "まだこの端末に診断結果が保存されていません。先に診断を行ってください。"
+      );
       return;
     }
     router.push(`/result?patientId=${patientId}`);
   };
 
-  // まだ patientId が localStorage から読めていない時
-  if (loading && patientId === null) {
+  // 🔹 ログアウト処理
+  const handleLogout = async () => {
+    try {
+      // Supabase セッションを破棄
+      await supabase.auth.signOut();
+
+      // middleware 用の role Cookie を削除
+      document.cookie =
+        "hito_yaku_role=; path=/; max-age=0; SameSite=Lax";
+
+      // この端末に紐づけていた診断IDも削除
+      if (typeof window !== "undefined") {
+        window.localStorage.removeItem(PATIENT_ID_KEY);
+      }
+
+      // ログイン画面へ
+      router.push("/login");
+    } catch (e) {
+      console.error("[mypage] logout error", e);
+      alert("ログアウト中にエラーが発生しました。時間をおいて再度お試しください。");
+    }
+  };
+
+  // 認証状態を待っている間
+  if (authLoading) {
     return (
       <div className="mx-auto flex max-w-3xl flex-col gap-6 px-4 py-10">
         <div className="flex items-center gap-2 text-slate-600">
@@ -228,11 +278,71 @@ export default function MyPage() {
     );
   }
 
-  // この端末に patient_id が保存されていない場合
-  if (!patientId) {
+  // 認証ガード発動中（/login へリダイレクト済み）
+  if (!isAuthenticated) {
+    return null;
+  }
+
+  // この端末に patient_id が保存されていない場合（診断前）
+  if (!dataLoading && !patientId) {
     return (
       <div className="mx-auto flex max-w-3xl flex-col gap-6 px-4 py-10">
         <h1 className="text-2xl font-semibold text-slate-900">マイページ</h1>
+
+        {/* アカウント情報ブロック */}
+        <AppCard className="flex flex-col gap-4">
+          <div className="flex items-center gap-3">
+            <UserCircle2 className="h-7 w-7 text-slate-500" />
+            <div>
+              <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
+                アカウント情報
+              </p>
+              <p className="text-sm text-slate-900">
+                {profile?.full_name || "お名前未設定"}
+              </p>
+            </div>
+          </div>
+
+          <div className="grid gap-3 text-xs text-slate-600 sm:grid-cols-2">
+            <div>
+              <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                メールアドレス
+              </div>
+              <div className="mt-1 text-sm">{profile?.email ?? "-"}</div>
+            </div>
+            <div>
+              <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                アカウント種別
+              </div>
+              <div className="mt-1 text-sm">{role ?? "-"}</div>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap gap-2 pt-2">
+            <AppButton
+              className="w-full sm:w-auto"
+              onClick={() => router.push("/mypage/edit")}
+            >
+              プロフィールを編集する
+            </AppButton>
+            <AppButton
+              variant="outline"
+              className="w-full sm:w-auto"
+              onClick={() => router.push("/mypage/password")}
+            >
+              パスワードを変更する
+            </AppButton>
+            <AppButton
+              variant="outline"
+              className="w-full sm:w-auto"
+              onClick={handleLogout}
+            >
+              ログアウト
+            </AppButton>
+          </div>
+        </AppCard>
+
+        {/* 診断未実施の案内 */}
         <AppCard className="flex flex-col gap-4">
           <div className="flex items-start gap-3">
             <AlertCircle className="mt-0.5 h-5 w-5 text-amber-500" />
@@ -257,12 +367,13 @@ export default function MyPage() {
     );
   }
 
+  // 通常表示（診断結果 + お気に入り + アカウント情報）
   return (
     <div className="mx-auto flex max-w-5xl flex-col gap-8 px-4 py-10">
       <header className="flex flex-col gap-2">
         <h1 className="text-2xl font-semibold text-slate-900">マイページ</h1>
         <p className="text-sm text-slate-500">
-          この端末で実施した診断結果と、「気になる薬剤師」の一覧を確認できます。
+          アカウント情報と、この端末で実施した診断結果、「気になる薬剤師」の一覧を確認できます。
         </p>
       </header>
 
@@ -272,6 +383,59 @@ export default function MyPage() {
           <span>{error}</span>
         </div>
       )}
+
+      {/* アカウント情報ブロック */}
+      <AppCard className="flex flex-col gap-4">
+        <div className="flex items-center gap-3">
+          <UserCircle2 className="h-7 w-7 text-slate-500" />
+          <div className="flex flex-col">
+            <span className="text-xs font-medium uppercase tracking-wide text-slate-500">
+              アカウント情報
+            </span>
+            <span className="text-sm text-slate-900">
+              {profile?.full_name || "お名前未設定"}
+            </span>
+          </div>
+        </div>
+
+        <div className="grid gap-3 text-xs text-slate-600 sm:grid-cols-2">
+          <div>
+            <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+              メールアドレス
+            </div>
+            <div className="mt-1 text-sm">{profile?.email ?? "-"}</div>
+          </div>
+          <div>
+            <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+              アカウント種別
+            </div>
+            <div className="mt-1 text-sm">{role ?? "-"}</div>
+          </div>
+        </div>
+
+        <div className="flex flex-wrap gap-2 pt-2">
+          <AppButton
+            className="w-full sm:w-auto"
+            onClick={() => router.push("/mypage/edit")}
+          >
+            プロフィールを編集する
+          </AppButton>
+          <AppButton
+            variant="outline"
+            className="w-full sm:w-auto"
+            onClick={() => router.push("/mypage/password")}
+          >
+            パスワードを変更する
+          </AppButton>
+          <AppButton
+            variant="outline"
+            className="w-full sm:w-auto"
+            onClick={handleLogout}
+          >
+            ログアウト
+          </AppButton>
+        </div>
+      </AppCard>
 
       {/* 診断結果ブロック */}
       <AppCard className="flex flex-col gap-4">
@@ -283,7 +447,9 @@ export default function MyPage() {
             </span>
             <span className="text-sm text-slate-900">
               {patient
-                ? `${formatPatientTypeLabel(patient.patient_type)} ／ ${formatCareStyleLabel(
+                ? `${formatPatientTypeLabel(
+                    patient.patient_type
+                  )} ／ ${formatCareStyleLabel(
                     (patient as any).care_style
                   )}`
                 : "診断結果が見つかりません"}
@@ -341,14 +507,14 @@ export default function MyPage() {
           </span>
         </div>
 
-        {loading && (
+        {dataLoading && (
           <div className="flex items-center gap-2 text-xs text-slate-500">
             <Loader2 className="h-4 w-4 animate-spin" />
             <span>お気に入り薬剤師を読み込んでいます...</span>
           </div>
         )}
 
-        {!loading && favorites.length === 0 && (
+        {!dataLoading && favorites.length === 0 && (
           <AppCard className="flex flex-col gap-2 text-xs text-slate-500">
             <p>まだ「気になる薬剤師」は登録されていません。</p>
             <p>
@@ -385,7 +551,8 @@ export default function MyPage() {
                           {pharmacist.name ?? "名前未設定"}
                         </span>
                         <span className="text-[11px] uppercase tracking-wide text-slate-400">
-                          {pharmacist.specialty?.join("・") ?? "専門領域 未設定"}
+                          {pharmacist.specialty?.join("・") ??
+                            "専門領域 未設定"}
                         </span>
                       </div>
                     </div>

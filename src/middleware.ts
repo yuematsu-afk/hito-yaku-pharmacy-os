@@ -4,29 +4,39 @@ import type { NextRequest } from "next/server";
 
 export function middleware(req: NextRequest) {
   const url = req.nextUrl.clone();
+  const { pathname } = req.nextUrl;
 
-  // 保護したいルート
-  const protectedPaths = ["/admin"];
+  // ① /admin 用の保護（既存ロジックを明示的にブロックに）
+  if (pathname.startsWith("/admin")) {
+    const token = req.cookies.get("admin_token")?.value;
 
-  const isProtected = protectedPaths.some((path) =>
-    req.nextUrl.pathname.startsWith(path)
-  );
+    // 未ログイン → /admin-login へリダイレクト
+    if (!token) {
+      url.pathname = "/admin-login";
+      return NextResponse.redirect(url);
+    }
 
-  if (!isProtected) {
     return NextResponse.next();
   }
 
-  const token = req.cookies.get("admin_token")?.value;
+  // ② /pharmacy 用の保護を追加
+  if (pathname.startsWith("/pharmacy")) {
+    const role = req.cookies.get("hito_yaku_role")?.value;
 
-  // 未ログイン → /admin-login へリダイレクト
-  if (!token) {
-    url.pathname = "/admin-login";
-    return NextResponse.redirect(url);
+    // ロールが pharmacy_company または admin 以外なら /login へ
+    if (role !== "pharmacy_company" && role !== "admin") {
+      url.pathname = "/login";
+      return NextResponse.redirect(url);
+    }
+
+    return NextResponse.next();
   }
 
+  // ③ それ以外は素通し
   return NextResponse.next();
 }
 
+// matcher を /pharmacy にも適用
 export const config = {
-  matcher: ["/admin/:path*", "/admin"],
+  matcher: ["/admin/:path*", "/admin", "/pharmacy/:path*", "/pharmacy"],
 };

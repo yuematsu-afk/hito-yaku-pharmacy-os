@@ -1,6 +1,7 @@
 // src/app/result/page.tsx
 "use client";
 
+import { Suspense } from "react";
 import { useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import Image from "next/image";
@@ -177,16 +178,35 @@ const TYPE_STYLE_MATCH: Record<
   },
 };
 
-export default function ResultPage() {
+export default function ResultContent() {
+  return (
+    <Suspense
+      fallback={
+        <div className="p-4 text-sm text-slate-600">
+          画面を読み込んでいます…
+        </div>
+      }
+    >
+      <InnerNewResultPage />
+    </Suspense>
+  );
+}
+
+function InnerNewResultPage() {
   const searchParams = useSearchParams();
   const patientId = searchParams.get("patientId");
+  const PATIENT_ID_KEY = "hito_yaku_patient_id";
   const typeParam = searchParams.get("type") as PatientType | null;
 
   const [patient, setPatient] = useState<Patient | null>(null);
   const [type, setType] = useState<PatientType | null>(typeParam);
   const [candidates, setCandidates] = useState<MatchCandidate[]>([]);
+  const [mainCandidate, setMainCandidate] = useState<MatchCandidate | null>(
+    null
+  );
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [isLinkedPatient, setIsLinkedPatient] = useState<boolean>(false);
 
   // 次のステップ用の状態
   const [selectedPharmacist, setSelectedPharmacist] =
@@ -211,7 +231,13 @@ export default function ResultPage() {
       setLoading(true);
       setError(null);
       try {
-        // 患者情報
+        // ① ログイン中ユーザーを取得
+        const {
+          data: { user },
+        } = await supabase.auth.getUser();
+        const currentAuthUserId = user?.id ?? null;
+
+        // ② 患者情報
         const { data: patientData, error: patientError } = await supabase
           .from("patients")
           .select("*")
@@ -225,13 +251,42 @@ export default function ResultPage() {
           return;
         }
 
-        setPatient(patientData);
+        // 患者レコードに auth_user_id が未設定で、ログイン中なら紐づける
+        let linkedAuthUserId =
+          ((patientData as any).auth_user_id as string | null) ?? null;
+
+        if (currentAuthUserId && !linkedAuthUserId) {
+          const { error: linkError } = await supabase
+            .from("patients")
+            .update({ auth_user_id: currentAuthUserId })
+            .eq("id", patientData.id);
+
+          if (linkError) {
+            console.error("patients.auth_user_id の更新に失敗しました", linkError);
+          } else {
+            linkedAuthUserId = currentAuthUserId;
+          }
+        }
+
+        const isLinked =
+          !!currentAuthUserId && linkedAuthUserId === currentAuthUserId;
+        setIsLinkedPatient(isLinked);
+
+        // state にも反映
+        setPatient({
+          ...patientData,
+          ...(linkedAuthUserId ? { auth_user_id: linkedAuthUserId } : {}),
+        } as Patient);
+
         const effectiveType =
           (typeParam as PatientType | null) ??
           ((patientData.type as PatientType | null) ?? "A");
         setType(effectiveType);
 
-        // 薬剤師 & 薬局情報
+        const mainPharmacistId =
+          ((patientData as any).main_pharmacist_id as string | null) ?? null;
+
+        // ③ 薬剤師 & 薬局情報
         const { data: pharmacistsData, error: phError } = await supabase
           .from("pharmacists")
           .select("*")
@@ -256,7 +311,22 @@ export default function ResultPage() {
           return;
         }
 
-        const merged: MatchCandidate[] = pharmacistsData.map((ph) => {
+        // ④ access_scope に基づくフィルタリング
+        //    - public: すべてのユーザーに表示
+        //    - registered_only: ログイン & この患者と紐づいている場合のみ表示
+        const filteredPharmacists = pharmacistsData.filter((ph) => {
+          const rawScope =
+            ((ph as any).access_scope as string | null) ?? "public";
+          const scope =
+            rawScope === "registered_only" || rawScope === "members"
+              ? "registered_only"
+              : "public";
+
+          if (scope === "public") return true;
+          return isLinked; // registered_only はリンク済み患者のみ
+        });
+
+        const merged: MatchCandidate[] = filteredPharmacists.map((ph) => {
           const pharmacy =
             pharmaciesData.find((p) => p.id === ph.belongs_pharmacy_id) ?? null;
           const { score, reasons } = scorePharmacist(
@@ -268,12 +338,20 @@ export default function ResultPage() {
           return { pharmacist: ph, pharmacy, score, reasons };
         });
 
+        // 担当薬剤師がいれば、その候補を控えておく（スコアに関係なく）
+        let mainCandidate: MatchCandidate | null = null;
+        if (mainPharmacistId) {
+          mainCandidate =
+            merged.find((m) => m.pharmacist.id === mainPharmacistId) ?? null;
+        }
+
         const sorted = merged
           .filter((m) => m.score > 0)
           .sort((a, b) => b.score - a.score)
           .slice(0, 3);
 
         setCandidates(sorted);
+        setMainCandidate(mainCandidate ?? null);
         setLoading(false);
       } catch (e) {
         console.error(e);
@@ -284,6 +362,17 @@ export default function ResultPage() {
 
     void run();
   }, [patientId, typeParam]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (!patient?.id) return;
+
+    try {
+      window.localStorage.setItem(PATIENT_ID_KEY, patient.id);
+    } catch (e) {
+      console.error("Failed to save patient id to localStorage", e);
+    }
+  }, [patient?.id]);
 
   if (loading) {
     return (
@@ -344,18 +433,19 @@ export default function ResultPage() {
   return (
     <div className="mx-auto max-w-3xl px-4 py-6 space-y-6">
       {/* 上部ヘッダー + 戻るボタン + 薬剤師一覧リンク */}
-      <div className="flex items-start justify-between gap-3">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
-          <h1 className="text-2xl font-bold">診断結果</h1>
-          <p className="mt-1 text-xs text-slate-600">
+          <h1 className="text-xl sm:text-2xl font-bold">診断結果</h1>
+          <p className="mt-1 text-xs sm:text-sm text-slate-600">
             あなたの相談スタイルと、相性が良さそうな顧問薬剤師のタイプ・候補をご案内します。
           </p>
         </div>
 
-        <div className="mt-1 flex flex-col gap-2">
+        <div className="mt-1 flex flex-col gap-2 w-full sm:w-auto">
           <AppButton
             variant="outline"
             size="sm"
+            className="w-full sm:w-auto"
             onClick={() => (window.location.href = "/diagnosis")}
           >
             診断をやり直す
@@ -364,6 +454,7 @@ export default function ResultPage() {
           <AppButton
             variant="primary"
             size="sm"
+            className="w-full sm:w-auto"
             onClick={() =>
               (window.location.href = `/pharmacists?patientId=${patient.id}`)
             }
@@ -374,6 +465,7 @@ export default function ResultPage() {
           <AppButton
             variant="secondary"
             size="sm"
+            className="w-full sm:w-auto"
             onClick={() => (window.location.href = "/favorites")}
           >
             気になる薬剤師一覧
@@ -390,6 +482,66 @@ export default function ResultPage() {
         </p>
         <ResultTypeDescription type={type} />
       </AppCard>
+
+      {/* 担当薬剤師（main_pharmacist_id がある場合） */}
+      {mainCandidate && (
+        <section className="space-y-2">
+          <h2 className="text-lg font-semibold">あなたの担当薬剤師</h2>
+          <AppCard className="flex flex-col gap-2 p-3 sm:p-4">
+            <p className="text-xs text-slate-700">
+              この方が、ヒトヤク上での「担当薬剤師」として登録されています。
+            </p>
+            <div className="grid gap-3 sm:grid-cols-[auto,1fr] items-center">
+              <div className="h-14 w-14 overflow-hidden rounded-full bg-slate-100">
+                {(() => {
+                  const rawImageUrl =
+                    ((mainCandidate.pharmacist as any)
+                      .image_url as string | null) ?? null;
+                  const displayImageSrc =
+                    rawImageUrl || "/images/pharmacist-placeholder.png";
+                  const isExternalImage =
+                    displayImageSrc.startsWith("http://") ||
+                    displayImageSrc.startsWith("https://");
+                  if (isExternalImage) {
+                    return (
+                      <img
+                        src={displayImageSrc}
+                        alt={`${mainCandidate.pharmacist.name}の写真`}
+
+                        className="h-full w-full object-cover"
+                      />
+                    );
+                  }
+                  return (
+                    <Image
+                      src={displayImageSrc}
+                      alt={`${mainCandidate.pharmacist.name}の写真`}
+                      width={56}
+                      height={56}
+                      className="h-full w-full object-cover"
+                    />
+                  );
+                })()}
+              </div>
+              <div className="space-y-1">
+                <p className="text-sm font-semibold text-slate-900">
+                  {mainCandidate.pharmacist.name}
+                </p>
+                {mainCandidate.pharmacy && (
+                  <p className="text-[11px] text-slate-600">
+                    {mainCandidate.pharmacy.name}（
+                    {mainCandidate.pharmacy.area || "エリア未設定"}）
+                  </p>
+                )}
+                <p className="text-[11px] text-slate-600">
+                  担当薬剤師として、継続的な相談やフォローを想定したポジションです。
+                  スポット相談から、関係づくりを進めていくこともできます。
+                </p>
+              </div>
+            </div>
+          </AppCard>
+        </section>
+      )}
 
       {/* ② 相談スタイル（6タイプ）＋レーダー＋顧問薬剤師タイプ ＋ 相関図 */}
       {careInfo && careStyle && (
@@ -463,6 +615,11 @@ export default function ResultPage() {
         <p className="text-xs text-slate-600">
           気になる薬剤師がいれば、「LINEで相談する」または「この薬剤師にスポット相談を申し込む」から、下のフォーム経由で連絡先を送信できます。
         </p>
+        {!isLinkedPatient && (
+          <p className="text-[11px] text-slate-500">
+            ※ログインして担当患者として登録されると、「登録患者限定」の薬剤師も表示されるようになります。
+          </p>
+        )}
         {candidates.length === 0 && (
           <p className="text-sm text-slate-600">
             条件に合う薬剤師がまだ登録されていません。サービス準備中のため、順次追加予定です。
@@ -483,8 +640,7 @@ export default function ResultPage() {
                   setContactPrefill({
                     message: options.memo ?? "",
                     contactPlaceholder:
-                      options.contactPlaceholder ??
-                      "電話番号を入力してください",
+                      options.contactPlaceholder ?? "電話番号を入力してください",
                     highlight: true,
                   });
                 } else {
@@ -506,7 +662,7 @@ export default function ResultPage() {
       </section>
 
       {/* ④ 次のステップ案内 + 連絡先フォーム */}
-      <section id="contact-section" className="mt-4">
+      <section id="contact-section" className="mt-4 scroll-mt-24">
         <AppCard
           className={[
             "space-y-4 transition-shadow transition-colors",
@@ -1200,7 +1356,7 @@ function TypeStyleRelation({
 
 /**
  * 薬剤師カード
- * - 顔写真・性別・年代・一言メッセージ・visibility を一覧ページと揃える
+ * - 顔写真・性別・年代・一言メッセージ・visibility / access_scope を一覧ページと揃える
  * - LINE相談 / Googleカレンダー予約 / スポット相談フォーム連携
  */
 function PharmacistCard({
@@ -1225,12 +1381,14 @@ function PharmacistCard({
     ((pharmacist as any).one_line_message as string | null) ??
     ((pharmacist as any).short_message as string | null) ??
     "";
-  const visibilityRaw =
-    ((pharmacist as any).visibility as string | null) ?? "members";
+  const rawAccessScope =
+    ((pharmacist as any).access_scope as string | null) ??
+    ((pharmacist as any).visibility as string | null) ??
+    "public";
   const visibility: VisibilityType =
-    visibilityRaw === "public"
+    rawAccessScope === "public"
       ? "public"
-      : visibilityRaw === "members"
+      : rawAccessScope === "registered_only" || rawAccessScope === "members"
       ? "members"
       : "other";
 
@@ -1389,10 +1547,16 @@ function PharmacistCard({
               "rounded-full px-2 py-0.5 text-[10px] border",
               visibility === "public"
                 ? "border-emerald-300 bg-emerald-50 text-emerald-700"
+                : visibility === "members"
+                ? "border-slate-300 bg-slate-50 text-slate-700"
                 : "border-slate-300 bg-slate-50 text-slate-700",
             ].join(" ")}
           >
-            {visibility === "public" ? "一般公開" : "登録ユーザー限定"}
+            {visibility === "public"
+              ? "一般公開"
+              : visibility === "members"
+              ? "登録患者限定"
+              : "限定公開"}
           </span>
           <FavoriteButton pharmacistId={pharmacist.id} />
         </div>
@@ -1517,7 +1681,8 @@ function PharmacistCard({
           ))}
         </ul>
 
-        <div className="mt-2 flex flex-col gap-1">
+        <div className="mt-2
+ flex flex-col gap-1">
           {/* Googleカレンダー予約（事前フォーム付き） */}
           {bookingUrl && (
             <div className="space-y-1">

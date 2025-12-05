@@ -2,8 +2,12 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 import { AppCard } from "@/components/ui/app-card";
+import { AppButton } from "@/components/ui/app-button";
+import { useUser } from "@/hooks/useUser";
+import { Loader2, Shield, AlertCircle } from "lucide-react";
 
 // Recharts
 import {
@@ -34,14 +38,33 @@ interface Summary {
   }[];
 }
 
-export default function DashboardPage() {
-  const [loading, setLoading] = useState(true);
+export default function AdminDashboardPage() {
+  const router = useRouter();
+  const { loading: authLoading, isAuthenticated, role, profile } = useUser();
+
+  const [dataLoading, setDataLoading] = useState(true);
   const [summary, setSummary] = useState<Summary | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  // 認証 & ロールガード（admin 以外は入れない）
   useEffect(() => {
+    if (!authLoading) {
+      if (!isAuthenticated) {
+        router.push("/login");
+        return;
+      }
+      if (role !== "admin") {
+        router.push("/mypage");
+      }
+    }
+  }, [authLoading, isAuthenticated, role, router]);
+
+  // ダッシュボード集計データの読み込み（admin ログイン時のみ）
+  useEffect(() => {
+    if (authLoading || !isAuthenticated || role !== "admin") return;
+
     const load = async () => {
-      setLoading(true);
+      setDataLoading(true);
       setError(null);
 
       try {
@@ -79,7 +102,7 @@ export default function DashboardPage() {
           if (p.relation_status === "lead") leadCount++;
           if (p.relation_status === "ended") endedCount++;
 
-          // フォロー予定（今週）
+          // フォロー予定（今週〜7日以内）
           if (p.next_contact_at) {
             const d = new Date(p.next_contact_at);
             if (d >= now && d <= oneWeekLater) {
@@ -127,32 +150,83 @@ export default function DashboardPage() {
           pharmacistRanking,
         });
       } catch (err: any) {
-        console.error("Dashboard load error", err);
+        console.error("Admin dashboard load error", err);
         setError(err.message ?? "読み込みエラーが発生しました");
       } finally {
-        setLoading(false);
+        setDataLoading(false);
       }
     };
 
     load();
-  }, []);
+  }, [authLoading, isAuthenticated, role]);
+
+  // 認証確認中
+  if (authLoading) {
+    return (
+      <div className="mx-auto max-w-6xl px-4 py-8">
+        <AppCard className="flex items-center gap-2 py-6 text-sm text-slate-600">
+          <Loader2 className="h-4 w-4 animate-spin" />
+          <span>管理者ダッシュボードを読み込んでいます...</span>
+        </AppCard>
+      </div>
+    );
+  }
+
+  // admin 以外はここには来ない想定（middleware + useEffect でリダイレクト）
+  if (!isAuthenticated || role !== "admin") {
+    return null;
+  }
 
   return (
     <div className="mx-auto max-w-6xl px-4 py-8 space-y-6">
-      <h1 className="text-2xl font-semibold tracking-tight text-slate-900">
-        薬局ダッシュボード
-      </h1>
-      <p className="text-sm text-slate-500">
-        顧問患者、フォロー予定、薬剤師別担当状況を確認できます。
-      </p>
+      {/* ヘッダー */}
+      <header className="flex items-center justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <Shield className="h-6 w-6 text-indigo-600" />
+          <div>
+            <h1 className="text-2xl font-semibold tracking-tight text-slate-900">
+              管理者ダッシュボード
+            </h1>
+            <p className="text-sm text-slate-500">
+              PharmacyOS 全体の顧問患者・フォロー予定・薬剤師別担当状況を確認できます。
+            </p>
+          </div>
+        </div>
+        <div className="hidden text-right text-xs text-slate-500 sm:block">
+          <p>{profile?.full_name ?? "お名前未設定"}</p>
+          <p className="text-[11px] text-slate-400">
+            {profile?.email ?? "-"}
+          </p>
+          <p className="mt-0.5 text-[11px] text-slate-400">ロール：{role}</p>
+        </div>
+      </header>
 
-      {loading ? (
+      {/* ナビゲーション的な補助ボタン（任意） */}
+      <div className="flex flex-wrap gap-2">
+        <AppButton
+          variant="outline"
+          size="sm"
+          onClick={() => router.push("/mypage")}
+        >
+          マイページへ
+        </AppButton>
+        <AppButton
+          variant="outline"
+          size="sm"
+          onClick={() => router.push("/pharmacy/dashboard")}
+        >
+          薬局ダッシュボードへ
+        </AppButton>
+      </div>
+
+      {dataLoading ? (
         <AppCard className="py-10 text-center text-sm text-slate-500">
-          読み込み中…
+          データを読み込み中です…
         </AppCard>
       ) : error ? (
-        <AppCard className="py-4 border-red-200 bg-red-50 text-red-700 text-sm">
-          {error}
+        <AppCard className="flex items-start gap-2 border-red-200 bg-red-50 px-3 py-3 text-sm text-red-700">
+          <AlertCircle className="mt-0.5 h-4 w-4" />
+          <span>{error}</span>
         </AppCard>
       ) : !summary ? (
         <AppCard className="py-10 text-center text-sm text-slate-500">
@@ -160,7 +234,7 @@ export default function DashboardPage() {
         </AppCard>
       ) : (
         <>
-          {/* KPI カード 4つ */}
+          {/* KPI カード群 */}
           <div className="grid gap-4 sm:grid-cols-4">
             <AppCard className="p-4">
               <div className="text-xs text-slate-500">顧問中（advisor）</div>
@@ -191,21 +265,24 @@ export default function DashboardPage() {
                 {summary.weeklyLogCount}
               </div>
             </AppCard>
+          </div>
+
+          <div className="flex items-center justify-end">
             <a
-            href="/admin/appointments"
-            className="inline-flex items-center rounded-md border border-slate-300 px-3 py-1.5 text-[11px] text-slate-700 hover:bg-slate-50"
+              href="/admin/appointments"
+              className="inline-flex items-center rounded-md border border-slate-300 px-3 py-1.5 text-[11px] text-slate-700 hover:bg-slate-50"
             >
-            予約ログを見る
+              予約ログを見る
             </a>
           </div>
 
           {/* ステータス構成：円グラフ */}
-          <AppCard className="p-4 space-y-3">
+          <AppCard className="space-y-3 p-4">
             <h2 className="text-sm font-semibold text-slate-900">
               患者ステータス構成（全体）
             </h2>
 
-            <div className="w-full flex justify-center">
+            <div className="flex w-full justify-center">
               <ResponsiveContainer width="100%" height={260}>
                 <PieChart>
                   <Pie
@@ -249,17 +326,17 @@ export default function DashboardPage() {
           </AppCard>
 
           {/* 薬剤師ランキング：棒グラフ */}
-          <AppCard className="p-4 space-y-3">
+          <AppCard className="space-y-3 p-4">
             <h2 className="text-sm font-semibold text-slate-900">
               薬剤師別担当患者数（棒グラフ）
             </h2>
 
             {summary.pharmacistRanking.length === 0 ? (
-              <div className="text-xs text-slate-500 py-2">
+              <div className="py-2 text-xs text-slate-500">
                 データがありません。
               </div>
             ) : (
-              <div className="w-full mt-4">
+              <div className="mt-4 w-full">
                 <ResponsiveContainer width="100%" height={260}>
                   <BarChart
                     data={summary.pharmacistRanking.map((ph) => ({
@@ -280,12 +357,12 @@ export default function DashboardPage() {
           </AppCard>
 
           {/* 薬剤師ランキング（リスト） */}
-          <AppCard className="p-4 space-y-3">
+          <AppCard className="space-y-3 p-4">
             <h2 className="text-sm font-semibold text-slate-900">
               担当患者数ランキング（薬剤師）
             </h2>
             {summary.pharmacistRanking.length === 0 ? (
-              <div className="text-xs text-slate-500 py-2">
+              <div className="py-2 text-xs text-slate-500">
                 担当薬剤師のデータがありません。
               </div>
             ) : (

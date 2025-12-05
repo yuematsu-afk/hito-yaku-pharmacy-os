@@ -4,7 +4,12 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
-import type { Pharmacist, Pharmacy, Patient, PatientType } from "@/types/supabase";
+import type {
+  Pharmacist,
+  Pharmacy,
+  Patient,
+  PatientType,
+} from "@/types/supabase";
 import { scorePharmacist } from "@/lib/matching/scorePharmacist";
 import { AppCard } from "@/components/ui/app-card";
 import { AppButton } from "@/components/ui/app-button";
@@ -27,11 +32,12 @@ export default function FavoritePharmacistsPage() {
   const [patientType, setPatientType] = useState<PatientType | null>(null);
   const [items, setItems] = useState<FavoriteItem[]>([]);
   const [localPatientId, setLocalPatientId] = useState<string | null>(null);
+  const [authUserId, setAuthUserId] = useState<string | null>(null);
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // 初期ロード：localStorage から patient_id を取得し、患者情報＋お気に入り薬剤師を読み込む
+  // 初期ロード
   useEffect(() => {
     const run = async () => {
       setLoading(true);
@@ -43,47 +49,66 @@ export default function FavoritePharmacistsPage() {
           return;
         }
 
+        // --- 1) localStorage から patient_id 取得 ---
         const stored = window.localStorage.getItem(PATIENT_ID_KEY);
         if (!stored) {
-          // 診断未実施 or 別端末
           setLocalPatientId(null);
-          setPatient(null);
-          setPatientType(null);
-          setItems([]);
-          setLoading(false);
-          return;
+        } else {
+          setLocalPatientId(stored);
         }
 
-        setLocalPatientId(stored);
-
-        // 1) 患者情報
+        // --- 2) 患者情報（診断結果） ---
         let loadedPatient: Patient | null = null;
         let loadedType: PatientType | null = null;
 
-        const { data: p, error: pError } = await supabase
-          .from("patients")
-          .select("*")
-          .eq("id", stored)
-          .single<Patient>();
+        if (stored) {
+          const { data: p, error: pError } = await supabase
+            .from("patients")
+            .select("*")
+            .eq("id", stored)
+            .single<Patient>();
 
-        if (pError) {
-          console.error(pError);
-        } else if (p) {
-          loadedPatient = p;
-          loadedType = (p.type as PatientType | null) ?? ("A" as PatientType);
+          if (pError) {
+            console.error(pError);
+          } else if (p) {
+            loadedPatient = p;
+            loadedType =
+              (p.type as PatientType | null) ?? ("A" as PatientType);
+          }
         }
 
         setPatient(loadedPatient);
         setPatientType(loadedType);
 
-        // 2) お気に入り一覧（patient_favorites）
+        // --- 3) ログインユーザー取得 ---
+        const { data: userData, error: userError } =
+          await supabase.auth.getUser();
+        if (userError) {
+          console.error(userError);
+        }
+        const authId = userData.user?.id ?? null;
+        setAuthUserId(authId);
+
+        // --- 4) お気に入り一覧（patient_favorites） ---
         type FavoriteRow = { pharmacist_id: string };
 
-        const { data: favRows, error: favError } = await supabase
+        let favQuery = supabase
           .from("patient_favorites")
-          .select("pharmacist_id")
-          .eq("patient_id", stored)
-          .returns<FavoriteRow[]>();
+          .select("pharmacist_id");
+
+        // ログイン済みなら auth_user_id を優先
+        if (authId) {
+          favQuery = favQuery.eq("auth_user_id", authId);
+        } else if (stored) {
+          favQuery = favQuery.eq("patient_id", stored);
+        } else {
+          setItems([]);
+          setLoading(false);
+          return;
+        }
+
+        const { data: favRows, error: favError } =
+          await favQuery.returns<FavoriteRow[]>();
 
         if (favError) {
           throw favError;
@@ -97,7 +122,7 @@ export default function FavoritePharmacistsPage() {
 
         const pharmacistIds = favRows.map((r) => r.pharmacist_id);
 
-        // 3) 薬剤師情報
+        // --- 5) 薬剤師情報 ---
         const { data: pharmacistsData, error: phError } = await supabase
           .from("pharmacists")
           .select("*")
@@ -108,7 +133,7 @@ export default function FavoritePharmacistsPage() {
           throw phError;
         }
 
-        // 4) 薬局情報
+        // --- 6) 薬局情報 ---
         const { data: pharmaciesData, error: pmError } = await supabase
           .from("pharmacies")
           .select("*")
@@ -123,7 +148,7 @@ export default function FavoritePharmacistsPage() {
           pharmacyMap.set(phm.id, phm);
         });
 
-        // 5) マージ + 相性スコア計算
+        // --- 7) マージ + 相性スコア計算 ---
         const merged: FavoriteItem[] = (pharmacistsData ?? []).map((ph) => {
           const pharmacy =
             ph.belongs_pharmacy_id && pharmacyMap.has(ph.belongs_pharmacy_id)
@@ -193,21 +218,19 @@ export default function FavoritePharmacistsPage() {
             {patient &&
               "（診断結果に基づいて、相性スコアの高い順に並べています）"}
           </p>
+          {!authUserId && (
+            <p className="mt-1 text-[11px] text-slate-500">
+              ※ 現在ログインしていません。この端末の診断結果に紐づくお気に入りのみ表示されています。
+              ログイン後は、別の端末で登録したお気に入りも共有できるようになります。
+            </p>
+          )}
         </div>
 
         <div className="flex gap-2">
-          <AppButton
-            size="sm"
-            variant="outline"
-            onClick={handleGoDiagnosis}
-          >
+          <AppButton size="sm" variant="outline" onClick={handleGoDiagnosis}>
             顧問薬剤師診断をやり直す
           </AppButton>
-          <AppButton
-            size="sm"
-            variant="primary"
-            onClick={handleGoList}
-          >
+          <AppButton size="sm" variant="primary" onClick={handleGoList}>
             薬剤師一覧を見る
           </AppButton>
         </div>
@@ -240,8 +263,8 @@ export default function FavoritePharmacistsPage() {
         </div>
       ) : null}
 
-      {/* お気に入りがある場合の一覧 */}
-      {!loading && !error && localPatientId && (
+      {/* お気に入り一覧 */}
+      {!loading && !error && (authUserId || localPatientId) && (
         <>
           {items.length === 0 ? (
             <AppCard className="p-4 text-sm text-slate-700 space-y-2">
@@ -253,7 +276,11 @@ export default function FavoritePharmacistsPage() {
                 <AppButton variant="primary" size="sm" onClick={handleGoList}>
                   薬剤師一覧から探す
                 </AppButton>
-                <AppButton variant="outline" size="sm" onClick={handleGoDiagnosis}>
+                <AppButton
+                  variant="outline"
+                  size="sm"
+                  onClick={handleGoDiagnosis}
+                >
                   顧問薬剤師診断をやり直す
                 </AppButton>
               </div>
@@ -281,8 +308,10 @@ export default function FavoritePharmacistsPage() {
                 const ageCategory =
                   (pharmacist.age_category as string | null) ?? null;
 
-                const imageUrl =
+                const rawImageUrl =
                   ((pharmacist as any).image_url as string | null) ?? null;
+                const imageUrl =
+                  rawImageUrl || "/images/pharmacist-placeholder.png";
 
                 const languages =
                   (pharmacist.language as string[] | null) ?? [];
@@ -310,27 +339,38 @@ export default function FavoritePharmacistsPage() {
                     key={pharmacist.id}
                     className="flex flex-col p-3 sm:p-4 shadow-sm"
                   >
-                    {/* 上部：名前＋可視性＋お気に入りボタン */}
+                    {/* 上部：丸型写真＋名前＋可視性＋お気に入り */}
                     <div className="mb-2 flex items-start justify-between gap-2">
-                      <div className="space-y-1">
-                        <div className="text-sm font-semibold text-slate-900">
-                          {pharmacist.name}
+                      <div className="flex items-start gap-3">
+                        {/* 丸型アイコン（薬剤師一覧ページと揃える） */}
+                        <div className="h-16 w-16 overflow-hidden rounded-full bg-slate-100 flex-shrink-0">
+                          <img
+                            src={imageUrl}
+                            alt={pharmacist.name}
+                            className="h-full w-full object-cover"
+                          />
                         </div>
-                        <div className="flex flex-wrap items-center gap-1 text-[10px] text-slate-500">
-                          {pharmacy?.name && <span>{pharmacy.name}</span>}
-                          {pharmacy?.area && (
-                            <span className="rounded-full border border-slate-200 px-1.5 py-0.5">
-                              {pharmacy.area}
-                            </span>
+
+                        <div className="space-y-1">
+                          <div className="text-sm font-semibold text-slate-900">
+                            {pharmacist.name}
+                          </div>
+                          <div className="flex flex-wrap items-center gap-1 text-[10px] text-slate-500">
+                            {pharmacy?.name && <span>{pharmacy.name}</span>}
+                            {pharmacy?.area && (
+                              <span className="rounded-full border border-slate-200 px-1.5 py-0.5">
+                                {pharmacy.area}
+                              </span>
+                            )}
+                          </div>
+                          {oneLine && (
+                            <p className="text-[11px] text-slate-700">
+                              {oneLine.length > 40
+                                ? `${oneLine.slice(0, 40)}…`
+                                : oneLine}
+                            </p>
                           )}
                         </div>
-                        {oneLine && (
-                          <p className="text-[11px] text-slate-700">
-                            {oneLine.length > 40
-                              ? `${oneLine.slice(0, 40)}…`
-                              : oneLine}
-                          </p>
-                        )}
                       </div>
 
                       <div className="flex flex-col items-end gap-1">
@@ -346,7 +386,6 @@ export default function FavoritePharmacistsPage() {
                             ? "一般公開"
                             : "登録ユーザー限定"}
                         </span>
-                        {/* ここからお気に入り解除できるように onChange で UI も更新 */}
                         <FavoriteButton
                           pharmacistId={pharmacist.id}
                           onChange={(isFavorite) => {
@@ -363,18 +402,8 @@ export default function FavoritePharmacistsPage() {
                       </div>
                     </div>
 
-                    {/* 写真＋タグ類 */}
+                    {/* タグ類 */}
                     <div className="mb-2 space-y-1 text-[11px]">
-                      {imageUrl && (
-                        <div className="mb-2 h-24 w-full overflow-hidden rounded-md bg-slate-100">
-                          <img
-                            src={imageUrl}
-                            alt={pharmacist.name}
-                            className="h-full w-full object-cover"
-                          />
-                        </div>
-                      )}
-
                       <div className="flex flex-wrap items-center gap-1">
                         {years != null && (
                           <span className="rounded-full bg-slate-50 px-2 py-0.5 text-[10px] text-slate-700 border border-slate-200">

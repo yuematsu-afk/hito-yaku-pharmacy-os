@@ -117,8 +117,8 @@ export default function MyPage() {
   const {
     loading: authLoading,
     isAuthenticated,
-    profile,
     role,
+    user
   } = useUser();
 
   // 診断情報 / お気に入り
@@ -298,7 +298,10 @@ export default function MyPage() {
                 アカウント情報
               </p>
               <p className="text-sm text-slate-900">
-                {profile?.full_name || "お名前未設定"}
+                {(user?.user_metadata?.display_name ??
+                  user?.user_metadata?.full_name ??
+                  user?.email ??
+                  "お名前未設定")}
               </p>
             </div>
           </div>
@@ -308,7 +311,7 @@ export default function MyPage() {
               <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
                 メールアドレス
               </div>
-              <div className="mt-1 text-sm">{profile?.email ?? "-"}</div>
+              <div className="mt-1 text-sm">{user?.email ?? "-"}</div>
             </div>
             <div>
               <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
@@ -393,7 +396,10 @@ export default function MyPage() {
               アカウント情報
             </span>
             <span className="text-sm text-slate-900">
-              {profile?.full_name || "お名前未設定"}
+              {(user?.user_metadata?.display_name ??
+                user?.user_metadata?.full_name ??
+                user?.email ??
+                "お名前未設定")}
             </span>
           </div>
         </div>
@@ -403,7 +409,7 @@ export default function MyPage() {
             <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
               メールアドレス
             </div>
-            <div className="mt-1 text-sm">{profile?.email ?? "-"}</div>
+            <div className="mt-1 text-sm">{user?.email ?? "-"}</div>
           </div>
           <div>
             <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">

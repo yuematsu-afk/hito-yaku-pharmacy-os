@@ -20,7 +20,6 @@ export default function MyPagePassword() {
   const {
     loading: authLoading,
     isAuthenticated,
-    profile,
     user,
   } = useUser();
 
@@ -156,7 +155,7 @@ export default function MyPagePassword() {
             ログイン中のメールアドレス
           </p>
           <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
-            {profile?.email ?? user.email ?? "-"}
+            {user?.email ?? "-"}
           </div>
         </div>
 

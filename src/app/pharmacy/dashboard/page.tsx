@@ -26,7 +26,7 @@ type DashboardStats = {
 
 export default function PharmacyDashboardPage() {
   const router = useRouter();
-  const { loading: authLoading, isAuthenticated, role, profile } = useUser();
+  const { loading: authLoading, isAuthenticated, role, user } = useUser();
 
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [statsLoading, setStatsLoading] = useState(true);
@@ -139,7 +139,11 @@ export default function PharmacyDashboardPage() {
     return null;
   }
 
-  const displayName = profile?.full_name || profile?.email || "薬局アカウント";
+  const displayName =
+    (user?.user_metadata?.display_name ??
+      user?.user_metadata?.full_name ??
+      user?.email ??
+      "薬局アカウント") as string;
 
   return (
     <div className="mx-auto max-w-5xl px-0 py-6 space-y-6 sm:px-0">

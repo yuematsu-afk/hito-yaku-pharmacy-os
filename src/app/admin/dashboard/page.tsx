@@ -1,4 +1,3 @@
-// src/app/admin/dashboard/page.tsx
 "use client";
 
 import { useEffect, useState } from "react";
@@ -38,9 +37,18 @@ interface Summary {
   }[];
 }
 
+function getDisplayName(user: any): string {
+  const meta = user?.user_metadata ?? {};
+  return meta.full_name ?? meta.name ?? "お名前未設定";
+}
+
+function getDisplayEmail(user: any): string {
+  return user?.email ?? "-";
+}
+
 export default function AdminDashboardPage() {
   const router = useRouter();
-  const { loading: authLoading, isAuthenticated, role, profile } = useUser();
+  const { loading: authLoading, isAuthenticated, role, user } = useUser() as any;
 
   const [dataLoading, setDataLoading] = useState(true);
   const [summary, setSummary] = useState<Summary | null>(null);
@@ -77,14 +85,12 @@ export default function AdminDashboardPage() {
         const { data: patients, error: patientError } = await supabase
           .from("patients")
           .select("*");
-
         if (patientError) throw patientError;
 
         // 薬剤師データ（ランキング用）
         const { data: pharmacists, error: pharmacistError } = await supabase
           .from("pharmacists")
           .select("*");
-
         if (pharmacistError) throw pharmacistError;
 
         let advisorCount = 0;
@@ -132,7 +138,6 @@ export default function AdminDashboardPage() {
         const { data: logs, error: logError } = await supabase
           .from("patient_logs")
           .select("id, contact_at");
-
         if (logError) throw logError;
 
         const weeklyLogCount = (logs ?? []).filter((log: any) => {
@@ -151,7 +156,7 @@ export default function AdminDashboardPage() {
         });
       } catch (err: any) {
         console.error("Admin dashboard load error", err);
-        setError(err.message ?? "読み込みエラーが発生しました");
+        setError(err?.message ?? "読み込みエラーが発生しました");
       } finally {
         setDataLoading(false);
       }
@@ -192,11 +197,10 @@ export default function AdminDashboardPage() {
             </p>
           </div>
         </div>
+
         <div className="hidden text-right text-xs text-slate-500 sm:block">
-          <p>{profile?.full_name ?? "お名前未設定"}</p>
-          <p className="text-[11px] text-slate-400">
-            {profile?.email ?? "-"}
-          </p>
+          <p>{getDisplayName(user)}</p>
+          <p className="text-[11px] text-slate-400">{getDisplayEmail(user)}</p>
           <p className="mt-0.5 text-[11px] text-slate-400">ロール：{role}</p>
         </div>
       </header>
@@ -287,22 +291,10 @@ export default function AdminDashboardPage() {
                 <PieChart>
                   <Pie
                     data={[
-                      {
-                        name: "見込み (lead)",
-                        value: summary.leadCount,
-                      },
-                      {
-                        name: "対応中 (active)",
-                        value: summary.activeCount,
-                      },
-                      {
-                        name: "顧問中 (advisor)",
-                        value: summary.advisorCount,
-                      },
-                      {
-                        name: "終了 (ended)",
-                        value: summary.endedCount,
-                      },
+                      { name: "見込み (lead)", value: summary.leadCount },
+                      { name: "対応中 (active)", value: summary.activeCount },
+                      { name: "顧問中 (advisor)", value: summary.advisorCount },
+                      { name: "終了 (ended)", value: summary.endedCount },
                     ]}
                     cx="50%"
                     cy="50%"
@@ -314,10 +306,10 @@ export default function AdminDashboardPage() {
                     fill="#8884d8"
                     dataKey="value"
                   >
-                    <Cell fill="#94a3b8" /> {/* lead */}
-                    <Cell fill="#38bdf8" /> {/* active */}
-                    <Cell fill="#34d399" /> {/* advisor */}
-                    <Cell fill="#cbd5e1" /> {/* ended */}
+                    <Cell fill="#94a3b8" />
+                    <Cell fill="#38bdf8" />
+                    <Cell fill="#34d399" />
+                    <Cell fill="#cbd5e1" />
                   </Pie>
                   <Tooltip />
                 </PieChart>

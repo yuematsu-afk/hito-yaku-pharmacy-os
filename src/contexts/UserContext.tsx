@@ -41,7 +41,18 @@ export type UserContextValue = {
 
 export const UserContext = createContext<UserContextValue | null>(null);
 
-// ---- debug helpers (PIIを極力避ける) ----
+/** ---- logging (prodではlog/warnを無効化) ---- */
+const IS_PROD = process.env.NODE_ENV === "production";
+const log = (...args: any[]) => {
+  if (!IS_PROD) console.log(...args);
+};
+const warn = (...args: any[]) => {
+  if (!IS_PROD) console.warn(...args);
+};
+// error は本番でも出す（監視のため）
+const errLog = (...args: any[]) => console.error(...args);
+
+/** ---- debug helpers (PIIを極力避ける) ---- */
 function nowIso(): string {
   return new Date().toISOString();
 }
@@ -68,6 +79,14 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
   // 最新実行のみ state を更新する
   const runIdRef = useRef(0);
 
+  // onAuthStateChange からの無駄な load() を抑制するための履歴
+  const lastLoadedUserIdRef = useRef<string | null>(null);
+  const lastLoadAtRef = useRef<number>(0);
+
+  // “詰まったら自己回復” 用
+  const retryCountRef = useRef<number>(0);
+  const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   const clearProfileState = useCallback(() => {
     setRole(null);
     setRelatedPatientId(null);
@@ -75,7 +94,49 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
     setAccountType(null);
   }, []);
 
+  const clearRetryTimer = useCallback(() => {
+    if (retryTimerRef.current) {
+      clearTimeout(retryTimerRef.current);
+      retryTimerRef.current = null;
+    }
+  }, []);
+
+  const scheduleRetry = useCallback(
+    (reason: string) => {
+      // 最大3回まで（0,1,2 → 3回）
+      if (retryCountRef.current >= 3) return;
+
+      const attempt = retryCountRef.current + 1;
+      retryCountRef.current = attempt;
+
+      const backoffMs = Math.min(8000, 1000 * Math.pow(2, attempt - 1)); // 1s,2s,4s（最大8s）
+      warn("[UserProvider] self-heal retry scheduled", {
+        at: nowIso(),
+        attempt,
+        backoffMs,
+        reason,
+      });
+
+      clearRetryTimer();
+      retryTimerRef.current = setTimeout(() => {
+        retryTimerRef.current = null;
+        void load(); // load は useCallback で下に定義（関数巻き上げOK）
+      }, backoffMs);
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [clearRetryTimer]
+  );
+
   const load = useCallback(async () => {
+    // 連打の最小間隔（onAuthStateChangeの多重発火対策）
+    const now = Date.now();
+    if (now - lastLoadAtRef.current < 250) {
+      // 直近すぎるなら pending に回す（inFlightの時と同様の扱い）
+      pendingRef.current = true;
+      return;
+    }
+    lastLoadAtRef.current = now;
+
     if (inFlightRef.current) {
       pendingRef.current = true;
       return;
@@ -101,16 +162,23 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
       const u = sessionRes.data.session?.user ?? null;
 
       if (runId !== runIdRef.current) return;
+
+      // user が変わったら（or null→user / user→null）リトライ回数リセット
+      const uid = u?.id ?? null;
+      if (uid !== lastLoadedUserIdRef.current) {
+        retryCountRef.current = 0;
+        clearRetryTimer();
+      }
+
       setUser(u);
 
       if (!u) {
+        lastLoadedUserIdRef.current = null;
         clearProfileState();
         return; // finallyでloading=false
       }
 
       // ② profile_users取得
-      // ★重要：Supabaseクエリは PostgrestBuilder なので、そのままだと Promise ではない
-      // → async IIFE で「Promise<PostgrestSingleResponse<ProfileUserRow>>」にしてから withTimeout に渡す
       const fetchProfile = async (): Promise<
         PostgrestSingleResponse<ProfileUserRow>
       > => {
@@ -140,7 +208,13 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
       setRelatedPharmacyId(pu?.related_pharmacy_id ?? null);
       setAccountType(pu?.account_type ?? null);
 
-      console.log("[UserProvider] load done", {
+      lastLoadedUserIdRef.current = u.id;
+
+      // 成功したら自己回復カウンタをリセット
+      retryCountRef.current = 0;
+      clearRetryTimer();
+
+      log("[UserProvider] load done", {
         at: nowIso(),
         runId,
         elapsedMs: Date.now() - startedAt,
@@ -151,18 +225,25 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
       if (runId !== runIdRef.current) return;
 
       if (e instanceof TimeoutError) {
-        console.warn("[UserProvider] load timeout", {
+        warn("[UserProvider] load timeout", {
           at: nowIso(),
           runId,
           elapsedMs: Date.now() - startedAt,
           message: e.message,
         });
+
+        // “詰まったら自己回復”
+        scheduleRetry("timeout");
       } else {
-        console.error("[UserProvider] load error", e);
+        errLog("[UserProvider] load error", e);
+
+        // タイムアウト以外でも一時障害はありえるので軽く自己回復（ただし回数制限）
+        scheduleRetry("non-timeout error");
       }
 
       // 安全側：未認証扱い
       setUser(null);
+      lastLoadedUserIdRef.current = null;
       clearProfileState();
     } finally {
       if (runId === runIdRef.current) {
@@ -176,23 +257,61 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
         void load();
       }
     }
-  }, [clearProfileState]);
+  }, [clearProfileState, clearRetryTimer, scheduleRetry]);
+
+  /** onAuthStateChange で load() するかどうかの判定 */
+  const shouldLoadForEvent = useCallback(
+    (event: string, sessionUserId: string | null) => {
+      // SIGNED_OUT は load せず state クリアは Supabase側セッション→次loadで反映されるが、
+      // ここでは即時性のため load を呼ばずにOK（必要ならここで clear しても良い）
+      if (event === "SIGNED_OUT") return false;
+
+      // user がいないなら load しても profile は取れないので不要
+      if (!sessionUserId) return false;
+
+      // INITIAL_SESSION / SIGNED_IN の二重発火対策：
+      // すでに同じ userId をロード済みならスキップ
+      if (
+        (event === "INITIAL_SESSION" || event === "SIGNED_IN") &&
+        lastLoadedUserIdRef.current === sessionUserId
+      ) {
+        return false;
+      }
+
+      // TOKEN_REFRESHED は通常ロード不要（必要なら true にする）
+      if (event === "TOKEN_REFRESHED") return false;
+
+      // USER_UPDATED も通常はロード不要（必要なら true にする）
+      if (event === "USER_UPDATED") return false;
+
+      // その他は実行
+      return true;
+    },
+    []
+  );
 
   useEffect(() => {
     void load();
 
-    const { data } = supabase.auth.onAuthStateChange((event) => {
-      console.log("[UserProvider] onAuthStateChange", {
+    const { data } = supabase.auth.onAuthStateChange((event, session) => {
+      const sessionUserId = session?.user?.id ?? null;
+
+      log("[UserProvider] onAuthStateChange", {
         at: nowIso(),
         event,
+        userId8: maskUserId(sessionUserId),
       });
-      void load();
+
+      if (shouldLoadForEvent(event, sessionUserId)) {
+        void load();
+      }
     });
 
     return () => {
       data.subscription.unsubscribe();
+      clearRetryTimer();
     };
-  }, [load]);
+  }, [load, shouldLoadForEvent, clearRetryTimer]);
 
   const value: UserContextValue = useMemo(() => {
     const isAuthenticated = !!user;

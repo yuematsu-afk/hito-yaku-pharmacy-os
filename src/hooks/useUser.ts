@@ -6,25 +6,18 @@ import { useUserContext } from "@/contexts/UserContext";
 // アプリ側で扱うロール
 export type AppRole = "patient" | "pharmacy_company" | "admin";
 
-// profiles.role に入っている想定のロール
-// 互換性のため "pharmacy" も含めるが、今後は "pharmacy_company" を正とする
-type DbProfileRole =
+// profiles.role に入っている想定のロール（互換含む）
+export type DbProfileRole =
   | "patient"
   | "pharmacy"
   | "pharmacy_company"
   | "admin"
   | null;
 
-// DBロール → アプリロール への変換
+// DBロール → アプリロール への変換（互換）
 function dbRoleToAppRole(dbRole: DbProfileRole): AppRole {
   if (dbRole === "admin") return "admin";
-
-  // 旧 "pharmacy" も新 "pharmacy_company" も、アプリ側では同じ扱い
-  if (dbRole === "pharmacy" || dbRole === "pharmacy_company") {
-    return "pharmacy_company";
-  }
-
-  // それ以外 or null はすべて patient 扱い
+  if (dbRole === "pharmacy" || dbRole === "pharmacy_company") return "pharmacy_company";
   return "patient";
 }
 
@@ -33,22 +26,29 @@ export function useUser() {
 
   const isAuthenticated = !!ctx.user;
 
-  // DB 上のロール（profiles.role）をそのまま保持
-  const dbRole = (ctx.profile?.role as DbProfileRole) ?? null;
+  /**
+   * 重要：
+   * - いまの UserContext には `profile` が無いので参照しない
+   * - role / dbRole が ctx にあればそれを使う
+   * - dbRole だけある場合は変換して role を作る
+   * - どちらも無い場合は安全側で patient 扱い
+   */
+  const ctxAny = ctx as unknown as {
+    role?: AppRole;
+    dbRole?: DbProfileRole;
+  };
 
-  // アプリ側で使うロールに変換
-  const appRole: AppRole = dbRoleToAppRole(dbRole);
+  const dbRole: DbProfileRole = ctxAny.dbRole ?? null;
+  const role: AppRole = ctxAny.role ?? dbRoleToAppRole(dbRole);
 
-  const isPatient = appRole === "patient";
-  const isPharmacyCompany = appRole === "pharmacy_company";
-  const isAdmin = appRole === "admin";
+  const isPatient = role === "patient";
+  const isPharmacyCompany = role === "pharmacy_company";
+  const isAdmin = role === "admin";
 
   return {
     ...ctx,
     isAuthenticated,
-    // ここから先は「アプリ用ロール」を返す
-    role: appRole,
-    // 必要なら生の DB ロールも見られるようにしておく
+    role,
     dbRole,
     isPatient,
     isPharmacyCompany,

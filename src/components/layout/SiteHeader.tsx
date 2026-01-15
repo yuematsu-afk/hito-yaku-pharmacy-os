@@ -14,7 +14,7 @@ export function SiteHeader() {
     loading,
     isAuthenticated,
     role,
-    profile,
+    user,
     isPatient,
     isPharmacyCompany,
     isAdmin,
@@ -27,8 +27,7 @@ export function SiteHeader() {
       await supabase.auth.signOut();
 
       // role 用 Cookie も削除
-      document.cookie =
-        "hito_yaku_role=; path=/; max-age=0; SameSite=Lax";
+      document.cookie = "hito_yaku_role=; path=/; max-age=0; SameSite=Lax";
 
       setMobileOpen(false);
       router.push("/");
@@ -39,10 +38,16 @@ export function SiteHeader() {
 
   const isPharmacyLike = isPharmacyCompany || isAdmin;
 
+  // 表示名（profiles を使わず、auth の metadata と email で表示）
+  const displayName =
+    (user?.user_metadata?.display_name as string | undefined) ||
+    (user?.user_metadata?.full_name as string | undefined) ||
+    user?.email ||
+    "";
+
   const pharmacyDisplayName =
-    (profile?.full_name && profile.full_name.trim().length > 0
-      ? profile.full_name
-      : null) ?? (isAdmin ? "管理者アカウント" : "薬局アカウント");
+    (displayName && displayName.trim().length > 0 ? displayName : null) ??
+    (isAdmin ? "管理者アカウント" : "薬局アカウント");
 
   // メインメニュー（患者側 / 薬局側）
   const patientLinks = [
@@ -67,11 +72,7 @@ export function SiteHeader() {
       {/* 上段：ロゴ + 右側（PCナビ / スマホボタン） */}
       <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-2.5 sm:py-3">
         {/* ロゴ */}
-        <Link
-          href="/"
-          className="flex items-center gap-2"
-          onClick={closeMobile}
-        >
+        <Link href="/" className="flex items-center gap-2" onClick={closeMobile}>
           <span className="rounded-lg bg-emerald-100 px-2.5 py-1 text-xs font-semibold tracking-wide text-emerald-700">
             ヒトヤク
           </span>

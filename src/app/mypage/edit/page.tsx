@@ -1,4 +1,3 @@
-// src/app/mypage/edit/page.tsx
 "use client";
 
 import { useEffect, useState } from "react";
@@ -9,37 +8,79 @@ import { AppCard } from "@/components/ui/app-card";
 import { AppButton } from "@/components/ui/app-button";
 import { Loader2, ArrowLeft, CheckCircle2, AlertCircle } from "lucide-react";
 
+type ProfileRow = {
+  id: string;
+  full_name: string | null;
+};
+
+function toMessage(e: unknown): string {
+  if (e instanceof Error) return e.message;
+  return "予期せぬエラーが発生しました。";
+}
+
 export default function MyPageEdit() {
   const router = useRouter();
-  const {
-    loading: authLoading,
-    isAuthenticated,
-    profile,
-    refreshProfile,
-  } = useUser();
+  const { loading: authLoading, isAuthenticated, user, role, refresh } =
+    useUser() as any;
+
+  const [profileLoading, setProfileLoading] = useState(true);
+  const [profileId, setProfileId] = useState<string | null>(null);
 
   const [fullName, setFullName] = useState("");
   const [saving, setSaving] = useState(false);
   const [done, setDone] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // 認証状態に応じたガード
+  // 認証ガード
   useEffect(() => {
     if (!authLoading && !isAuthenticated) {
       router.push("/login");
     }
   }, [authLoading, isAuthenticated, router]);
 
-  // プロフィール情報から初期値をセット
+  // profiles から full_name を取得（このページが責務を持つ）
   useEffect(() => {
-    if (profile) {
-      setFullName(profile.full_name ?? "");
-    }
-  }, [profile]);
+    if (authLoading) return;
+    if (!isAuthenticated || !user?.id) return;
+
+    let alive = true;
+
+    const loadProfile = async () => {
+      setProfileLoading(true);
+      setError(null);
+
+      try {
+        const { data, error: fetchError } = await supabase
+          .from("profiles")
+          .select("id, full_name")
+          .eq("id", user.id)
+          .maybeSingle<ProfileRow>();
+
+        if (fetchError) throw fetchError;
+
+        if (!alive) return;
+
+        setProfileId(data?.id ?? user.id);
+        setFullName(data?.full_name ?? "");
+      } catch (e) {
+        if (!alive) return;
+        setError(toMessage(e));
+      } finally {
+        if (!alive) return;
+        setProfileLoading(false);
+      }
+    };
+
+    void loadProfile();
+
+    return () => {
+      alive = false;
+    };
+  }, [authLoading, isAuthenticated, user?.id]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!profile) return;
+    if (!user?.id) return;
 
     setSaving(true);
     setError(null);
@@ -52,7 +93,7 @@ export default function MyPageEdit() {
         .update({
           full_name: fullName || null,
         })
-        .eq("id", profile.id);
+        .eq("id", user.id);
 
       if (updateError) {
         console.error(updateError);
@@ -60,9 +101,10 @@ export default function MyPageEdit() {
         return;
       }
 
-      // 2) auth.user のメタデータ（display_name）も更新しておくと後で便利
+      // 2) auth.user のメタデータも更新（後方互換でキーを2つ入れる）
       const { error: metaError } = await supabase.auth.updateUser({
         data: {
+          full_name: fullName || null,
           display_name: fullName || null,
         },
       });
@@ -72,8 +114,8 @@ export default function MyPageEdit() {
         console.error("auth.updateUser metadata error", metaError);
       }
 
-      // 3) Context の profile を再取得
-      await refreshProfile();
+      // 3) Context の再取得（UserProviderのload）
+      await refresh?.();
 
       setDone(true);
     } catch (e) {
@@ -84,8 +126,8 @@ export default function MyPageEdit() {
     }
   };
 
-  // 認証チェック中
-  if (authLoading || !profile) {
+  // 認証 or profile 読み込み中
+  if (authLoading || profileLoading) {
     return (
       <div className="mx-auto max-w-md px-4 py-8">
         <AppCard className="flex items-center gap-2 text-sm text-slate-600">
@@ -94,6 +136,11 @@ export default function MyPageEdit() {
         </AppCard>
       </div>
     );
+  }
+
+  // 未認証の場合（ガードで飛ぶが念のため）
+  if (!isAuthenticated || !user) {
+    return null;
   }
 
   return (
@@ -165,7 +212,7 @@ export default function MyPageEdit() {
               メールアドレス
             </label>
             <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
-              {profile.email ?? "-"}
+              {user.email ?? "-"}
             </div>
             <p className="mt-1 text-[11px] text-slate-500">
               メールアドレスの変更は現在サポートしていません。
@@ -177,16 +224,15 @@ export default function MyPageEdit() {
               アカウント種別
             </label>
             <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
-              {profile.role ?? "-"}
+              {role ?? "-"}
             </div>
           </div>
 
+          {/* profileIdは将来使う可能性があるので保持（未使用警告を避けたいなら消してOK） */}
+          <input type="hidden" value={profileId ?? ""} readOnly />
+
           <div className="pt-2 flex flex-col gap-2">
-            <AppButton
-              type="submit"
-              className="w-full"
-              disabled={saving}
-            >
+            <AppButton type="submit" className="w-full" disabled={saving}>
               {saving ? (
                 <span className="inline-flex items-center gap-2">
                   <Loader2 className="h-4 w-4 animate-spin" />

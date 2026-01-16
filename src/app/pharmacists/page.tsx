@@ -5,12 +5,7 @@ import { Suspense, useEffect, useMemo, useState } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import Image from "next/image";
 import { supabase } from "@/lib/supabaseClient";
-import type {
-  Pharmacist,
-  Pharmacy,
-  Patient,
-  PatientType,
-} from "@/types/supabase";
+import type { Pharmacist, Pharmacy, Patient, PatientType } from "@/types/supabase";
 import {
   scorePharmacist,
   type CareStyleKey,
@@ -24,7 +19,7 @@ type ExtendedPharmacist = Pharmacist & {
   visibility?: "public" | "members" | null;
   one_line_message?: string | null;
   gender?: "" | "女性" | "男性" | "その他" | null;
-  short_message?: string | null; 
+  short_message?: string | null;
   gender_other?: string | null;
   birth_date?: string | null;
   age_category?: "20代" | "30代" | "40代" | "50代" | "60代" | "70代以上" | null;
@@ -35,7 +30,7 @@ type ExtendedPharmacist = Pharmacist & {
   image_url?: string | null;
   care_role?: CareStyleKey[] | null;
   booking_url?: string | null;
-  line_url?: string | null; 
+  line_url?: string | null;
 };
 
 interface PharmacistWithPharmacy {
@@ -92,6 +87,7 @@ function PharmacistsListPageInner() {
   const searchParams = useSearchParams();
   const router = useRouter();
   const patientId = searchParams.get("patientId") ?? null;
+
   const [items, setItems] = useState<PharmacistWithPharmacy[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -117,7 +113,21 @@ function PharmacistsListPageInner() {
     const run = async () => {
       setLoading(true);
       setError(null);
+
       try {
+        // 0) セッション有無に応じて visibility 対象を切り替える
+        //    - 未ログイン: public のみ
+        //    - ログイン済み: public + members
+        // ※RLSが担保している前提だが、不要な条件取得を減らす
+        const { data: sessionRes, error: sessionError } =
+          await supabase.auth.getSession();
+        if (sessionError) {
+          // セッション取得失敗でも閲覧は可能にしたいので、ここでは落とさず public 扱いにする
+          console.warn("failed to get session:", sessionError);
+        }
+        const isAuthed = !!sessionRes?.session;
+        const visibilityTargets = isAuthed ? ["public", "members"] : ["public"];
+
         // 1) patientId があれば患者情報取得
         let loadedPatient: Patient | null = null;
         let loadedType: PatientType | null = null;
@@ -144,7 +154,7 @@ function PharmacistsListPageInner() {
         const { data: pharmacistsData, error: phError } = await supabase
           .from("pharmacists")
           .select("*")
-          .in("visibility", ["public", "members"]) // ログイン状況は public 側で制御
+          .in("visibility", visibilityTargets)
           .order("name", { ascending: true })
           .returns<ExtendedPharmacist[]>();
 
@@ -177,7 +187,7 @@ function PharmacistsListPageInner() {
         setItems(merged);
       } catch (e: any) {
         console.error(e);
-        setError(e.message ?? "薬剤師一覧の取得に失敗しました。");
+        setError(e?.message ?? "薬剤師一覧の取得に失敗しました。");
       } finally {
         setLoading(false);
       }
@@ -234,13 +244,11 @@ function PharmacistsListPageInner() {
       const languages = (pharmacist.language as string[] | null) ?? [];
       const specialties = (pharmacist.specialty as string[] | null) ?? [];
       const careRoles = (pharmacist.care_role as string[] | null) ?? [];
-      const experiences =
-        (pharmacist.experience_case as string[] | null) ?? [];
+      const experiences = (pharmacist.experience_case as string[] | null) ?? [];
 
       const years = pharmacist.years_of_experience ?? null;
       const gender = (pharmacist.gender as string | null) ?? null;
-      const ageCategory =
-        (pharmacist.age_category as string | null) ?? null;
+      const ageCategory = (pharmacist.age_category as string | null) ?? null;
 
       // キーワード検索（名前・薬局名・専門・言語・経験・一言メッセージなど）
       if (kw) {
@@ -320,12 +328,7 @@ function PharmacistsListPageInner() {
 
     // 患者情報がある場合はスコアを計算してソート
     const withScore = base.map(({ pharmacist, pharmacy }) => {
-      const { score } = scorePharmacist(
-        patient,
-        patientType,
-        pharmacist,
-        pharmacy
-      );
+      const { score } = scorePharmacist(patient, patientType, pharmacist, pharmacy);
       return { pharmacist, pharmacy, score };
     });
 
@@ -453,8 +456,7 @@ function PharmacistsListPageInner() {
             >
               <option value="all">すべて</option>
               {filterOptions.careRoles.map((c) => {
-                const label =
-                  CARE_STYLE_LABEL[c as CareStyleKey] ?? (c as string);
+                const label = CARE_STYLE_LABEL[c as CareStyleKey] ?? (c as string);
                 return (
                   <option key={c} value={c}>
                     {label}
@@ -526,13 +528,11 @@ function PharmacistsListPageInner() {
               }
             >
               <option value="all">指定なし</option>
-              {["20代", "30代", "40代", "50代", "60代", "70代以上"].map(
-                (ac) => (
-                  <option key={ac} value={ac}>
-                    {ac}
-                  </option>
-                )
-              )}
+              {["20代", "30代", "40代", "50代", "60代", "70代以上"].map((ac) => (
+                <option key={ac} value={ac}>
+                  {ac}
+                </option>
+              ))}
             </select>
           </div>
         </div>
@@ -576,10 +576,8 @@ function PharmacistsListPageInner() {
               displayImageSrc.startsWith("https://");
 
             const languages = (pharmacist.language as string[] | null) ?? [];
-            const specialties =
-              (pharmacist.specialty as string[] | null) ?? [];
-            const careRoles =
-              (pharmacist.care_role as CareStyleKey[] | null) ?? [];
+            const specialties = (pharmacist.specialty as string[] | null) ?? [];
+            const careRoles = (pharmacist.care_role as CareStyleKey[] | null) ?? [];
             const experiences =
               (pharmacist.experience_case as string[] | null) ?? [];
 
@@ -660,9 +658,7 @@ function PharmacistsListPageInner() {
                           : "border-slate-300 bg-slate-50 text-slate-700",
                       ].join(" ")}
                     >
-                      {visibility === "public"
-                        ? "一般公開"
-                        : "登録ユーザー限定"}
+                      {visibility === "public" ? "一般公開" : "登録ユーザー限定"}
                     </span>
                     <FavoriteButton pharmacistId={pharmacist.id} />
                   </div>
@@ -771,11 +767,7 @@ function PharmacistsListPageInner() {
                           variant="outline"
                           className="w-full sm:w-auto text-[11px]"
                           onClick={() =>
-                            window.open(
-                              bookingUrl,
-                              "_blank",
-                              "noopener,noreferrer"
-                            )
+                            window.open(bookingUrl, "_blank", "noopener,noreferrer")
                           }
                         >
                           空き時間を予約
@@ -785,11 +777,7 @@ function PharmacistsListPageInner() {
                         <button
                           type="button"
                           onClick={() =>
-                            window.open(
-                              lineUrl,
-                              "_blank",
-                              "noopener,noreferrer"
-                            )
+                            window.open(lineUrl, "_blank", "noopener,noreferrer")
                           }
                           className="w-full rounded-md border border-[#06C755] bg-[#06C755] px-3 py-1.5 text-[11px] font-medium text-white hover:opacity-90 sm:w-auto"
                         >

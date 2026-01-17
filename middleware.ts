@@ -4,56 +4,70 @@ import type { NextRequest } from "next/server";
 import { createServerClient } from "@supabase/ssr";
 
 export async function middleware(req: NextRequest) {
-  const res = NextResponse.next();
-  const { pathname } = req.nextUrl;
+  const { pathname, search } = req.nextUrl;
 
-  // login / register は必ず素通し
+  // 認証不要ページは必ず素通し（自己ループ防止）
   if (
     pathname.startsWith("/login") ||
     pathname.startsWith("/register") ||
-    pathname.startsWith("/reset-password")
+    pathname.startsWith("/reset-password") ||
+    pathname.startsWith("/admin-login")
   ) {
-    return res;
+    return NextResponse.next();
   }
 
-  // Supabase SSR client（Edge対応）
+  // まずレスポンス箱を作る（set-cookie を反映するため）
+  const res = NextResponse.next();
+
+  // Supabase SSR client（Edge向け：getAll / setAll でcookie同期）
   const supabase = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
     {
       cookies: {
-        get(name) {
-          return req.cookies.get(name)?.value;
+        getAll() {
+          return req.cookies.getAll();
         },
-        set(name, value, options) {
-          res.cookies.set({ name, value, ...options });
-        },
-        remove(name, options) {
-          res.cookies.set({ name, value: "", ...options });
+        setAll(cookies) {
+          for (const cookie of cookies) {
+            res.cookies.set(cookie);
+          }
         },
       },
     }
   );
 
-  // セッション取得
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  // セッション取得（失敗時は安全側＝未ログイン扱い）
+  let user: { id: string } | null = null;
+  try {
+    const { data, error } = await supabase.auth.getUser();
+    if (!error && data?.user) {
+      user = data.user;
+    }
+  } catch {
+    user = null;
+  }
 
-  // 🔴 pharmacy 配下はログイン必須
+  // redirectTo（オープンリダイレクト防止：同一オリジンのパスだけ）
+  const redirectTo = pathname + (search ?? "");
+
+  // pharmacy 配下はログイン必須
   if (pathname.startsWith("/pharmacy")) {
     if (!user) {
       const loginUrl = new URL("/login", req.url);
-      loginUrl.searchParams.set("redirectTo", pathname);
+      loginUrl.searchParams.set("redirectTo", redirectTo);
       return NextResponse.redirect(loginUrl);
     }
+    return res;
   }
 
-  // 🔴 admin 配下もログイン必須
+  // admin 配下もログイン必須（admin-login は上で素通し）
   if (pathname.startsWith("/admin")) {
     if (!user) {
-      return NextResponse.redirect(new URL("/admin-login", req.url));
+      const adminLoginUrl = new URL("/admin-login", req.url);
+      return NextResponse.redirect(adminLoginUrl);
     }
+    return res;
   }
 
   return res;

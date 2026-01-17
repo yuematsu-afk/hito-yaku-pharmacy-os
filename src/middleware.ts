@@ -6,29 +6,30 @@ export function middleware(req: NextRequest) {
   const url = req.nextUrl.clone();
   const { pathname } = req.nextUrl;
 
-  // ① /admin 用の保護（既存ロジックを明示的にブロックに）
-  if (pathname.startsWith("/admin")) {
-    const token = req.cookies.get("admin_token")?.value;
+  /**
+   * Supabase のセッション判定
+   * sb-access-token / sb-refresh-token が無ければ未ログインとみなす
+   */
+  const hasSupabaseSession =
+    req.cookies.get("sb-access-token") ||
+    req.cookies.get("sb-refresh-token");
 
-    // 未ログイン → /admin-login へリダイレクト
-    if (!token) {
+  // ① /admin 保護
+  if (pathname.startsWith("/admin")) {
+    if (!hasSupabaseSession) {
       url.pathname = "/admin-login";
       return NextResponse.redirect(url);
     }
-
     return NextResponse.next();
   }
 
-  // ② /pharmacy 用の保護を追加
+  // ② /pharmacy 保護
   if (pathname.startsWith("/pharmacy")) {
-    const role = req.cookies.get("hito_yaku_role")?.value;
-
-    // ロールが pharmacy_company または admin 以外なら /login へ
-    if (role !== "pharmacy_company" && role !== "admin") {
+    if (!hasSupabaseSession) {
       url.pathname = "/login";
+      url.searchParams.set("redirectTo", pathname);
       return NextResponse.redirect(url);
     }
-
     return NextResponse.next();
   }
 
@@ -36,7 +37,6 @@ export function middleware(req: NextRequest) {
   return NextResponse.next();
 }
 
-// matcher を /pharmacy にも適用
 export const config = {
   matcher: ["/admin/:path*", "/admin", "/pharmacy/:path*", "/pharmacy"],
 };
